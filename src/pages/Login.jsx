@@ -1,57 +1,92 @@
 import React, { useState } from 'react';
-import { Loader } from '../components/ui/Loader';
-import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
+import { supabase } from '../services/supabase';
+import { Loader2 } from 'lucide-react';
+import AlertModal from '../components/modals/AlertModal';
 
 const Login = () => {
+  const navigate = useNavigate();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
-  const [localLoading, setLocalLoading] = useState(false);
-  
-  const { signIn } = useAuth();
-  const navigate = useNavigate();
+  const [loading, setLoading] = useState(false);
+  const [alertInfo, setAlertInfo] = useState(null);
 
   const handleLogin = async (e) => {
     e.preventDefault();
-    setLocalLoading(true);
-    setError('');
+    setLoading(true);
+    
     try {
-      await signIn(email, password);
-      navigate('/'); // Redireciona para home após login
-    } catch (err) {
-      setError('Falha no login. Verifique seus dados.');
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+      navigate('/');
+    } catch (error) {
+      setAlertInfo({ type: 'error', title: 'Erro', message: 'Email ou senha incorretos.' });
     } finally {
-      setLocalLoading(false);
+      setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-white flex flex-col items-center justify-center p-8 animate-in fade-in">
-      <div className="w-full max-w-sm space-y-8 text-left">
-        <div className="text-center space-y-4">
-          <div className="mx-auto w-24 h-24 bg-yellow-400 rounded-3xl flex items-center justify-center shadow-lg border-4 border-white transform rotate-3 font-bold text-white text-4xl">
-            🍮
-          </div>
-          <h1 className="text-3xl font-black text-slate-800 uppercase tracking-tighter leading-none text-center font-bold">Pudinzinho</h1>
-          <p className="text-slate-400 font-bold italic text-center">Gestão de Vendas</p>
+    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6 animate-in fade-in">
+      <AlertModal 
+        isOpen={!!alertInfo} 
+        type={alertInfo?.type} 
+        title={alertInfo?.title} 
+        message={alertInfo?.message} 
+        onClose={() => setAlertInfo(null)} 
+      />
+
+      <div className="bg-white w-full max-w-sm p-8 rounded-[3rem] shadow-xl border border-slate-100 text-center">
+        
+        {/* LOGO PERSONALIZADA */}
+        <div className="flex justify-center mb-6">
+            <img 
+                src="/logon.png" 
+                alt="Logo Meu Pudinzinho" 
+                className="h-53 w-auto object-contain" 
+            />
         </div>
 
-        {error && <div className="bg-red-50 text-red-500 p-4 rounded-2xl text-xs font-bold text-center">{error}</div>}
+        {/* NOME ALTERADO */}
+        <h1 className="text-2xl font-black text-slate-800 uppercase mb-2">
+            Meu Pudinzinho
+        </h1>
+        
+        <p className="text-slate-400 font-bold text-xs uppercase tracking-widest mb-8">
+            Acesso Restrito
+        </p>
 
-        <form onSubmit={handleLogin} className="space-y-4 p-8 bg-slate-50 rounded-[2.5rem] border border-slate-100 shadow-inner">
-          <input 
-            type="email" placeholder="E-mail" 
-            className="w-full p-5 bg-white rounded-2xl outline-none shadow-sm focus:ring-2 focus:ring-yellow-400 transition-all text-slate-800 font-bold"
-            value={email} onChange={e => setEmail(e.target.value)} required 
-          />
-          <input 
-            type="password" placeholder="Senha" 
-            className="w-full p-5 bg-white rounded-2xl outline-none shadow-sm focus:ring-2 focus:ring-yellow-400 transition-all text-slate-800 font-bold"
-            value={password} onChange={e => setPassword(e.target.value)} required 
-          />
-          <button type="submit" disabled={localLoading} className="w-full py-5 bg-slate-900 text-white rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition-all flex items-center justify-center font-bold leading-none">
-            {localLoading ? <Loader /> : "Entrar"}
+        <form onSubmit={handleLogin} className="space-y-4 text-left">
+          <div className="space-y-1">
+            <label className="text-[10px] font-black text-slate-400 uppercase ml-3 tracking-widest">Email</label>
+            <input 
+                type="email" 
+                className="w-full p-4 bg-slate-50 rounded-2xl border-none font-bold outline-none focus:ring-2 focus:ring-yellow-400 text-slate-800" 
+                value={email} 
+                onChange={e => setEmail(e.target.value)} 
+                placeholder="nome@exemplo.com"
+                required
+            />
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-[10px] font-black text-slate-400 uppercase ml-3 tracking-widest">Senha</label>
+            <input 
+                type="password" 
+                className="w-full p-4 bg-slate-50 rounded-2xl border-none font-bold outline-none focus:ring-2 focus:ring-yellow-400 text-slate-800" 
+                value={password} 
+                onChange={e => setPassword(e.target.value)} 
+                placeholder="••••••"
+                required
+            />
+          </div>
+
+          <button 
+            type="submit" 
+            disabled={loading}
+            className="w-full py-4 bg-yellow-400 text-slate-900 rounded-2xl font-black uppercase text-sm tracking-widest shadow-lg shadow-yellow-100 active:scale-95 transition-all flex items-center justify-center gap-2 mt-4"
+          >
+            {loading ? <Loader2 className="animate-spin" size={20} /> : "Entrar"}
           </button>
         </form>
       </div>
