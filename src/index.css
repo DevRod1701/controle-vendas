@@ -1,0 +1,13 @@
+@import "tailwindcss";
+
+@theme {
+  /* Configurações de tema do v4 se necessário */
+}
+
+/* Garante que o html ocupe a tela toda */
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  scroll-behavior: smooth;
+}
