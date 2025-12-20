@@ -5,11 +5,17 @@ import { DataProvider } from './contexts/DataContext';
 import { Loader } from './components/ui/Loader';
 import Layout from './components/Layout';
 
+// Páginas Comuns
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Catalog from './pages/Catalog';
 import History from './pages/History';
 
+// Páginas do Vendedor (NOVAS)
+import Customers from './pages/Seller/Customers';
+import CustomerDetail from './pages/Seller/CustomerDetail';
+
+// Páginas Admin
 import Stock from './pages/Admin/Stock';
 import Team from './pages/Admin/Team';
 import Approvals from './pages/Admin/Approvals';
@@ -38,15 +44,26 @@ const AppRoutes = () => {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+
+      {/* Todas as rotas dentro do Layout são protegidas */}
       <Route element={<PrivateRoute><Layout /></PrivateRoute>}>
+        {/* Rotas Gerais */}
         <Route path="/" element={<Dashboard />} />
         <Route path="/catalogo" element={<Catalog />} />
         <Route path="/historico" element={<History />} />
+        
+        {/* Rotas do Vendedor (Caderninho) - NOVAS ROTAS */}
+        <Route path="/clientes" element={<Customers />} />
+        <Route path="/clientes/:id" element={<CustomerDetail />} />
+        
+        {/* Rotas de Admin */}
         <Route path="/estoque" element={<Stock />} />
         <Route path="/equipe" element={<Team />} />
         <Route path="/aprovacoes" element={<Approvals />} />
         <Route path="/novo-vendedor" element={<NewSeller />} />
       </Route>
+
+      {/* Rota coringa */}
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
@@ -54,7 +71,6 @@ const AppRoutes = () => {
 
 const App = () => {
   return (
-    // Adicionamos estas flags para remover os warnings do console
     <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <AuthProvider>
         <DataProvider>

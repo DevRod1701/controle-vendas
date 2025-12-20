@@ -1,54 +1,70 @@
-import React, { createContext, useState, useEffect, useContext, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect } from 'react';
 import { supabase } from '../services/supabase';
 import { useAuth } from './AuthContext';
 
-const DataContext = createContext({});
+const DataContext = createContext();
+
+export const useData = () => useContext(DataContext);
 
 export const DataProvider = ({ children }) => {
   const { session } = useAuth();
   const [products, setProducts] = useState([]);
   const [orders, setOrders] = useState([]);
   const [payments, setPayments] = useState([]);
-  const [loadingData, setLoadingData] = useState(false);
+  
+  // NOVOS ESTADOS
+  const [customers, setCustomers] = useState([]);
+  const [customerTransactions, setCustomerTransactions] = useState([]);
+  
+  const [loading, setLoading] = useState(true);
 
-  const loadData = useCallback(async () => {
-    if (!session) return;
-    setLoadingData(true);
-    
-    const { data: pData } = await supabase.from('products').select('*').order('name');
-    if (pData) setProducts(pData);
+  const refreshData = async () => {
+    if (!session?.user) return;
 
-    const { data: oData } = await supabase.from('orders').select('*, order_items(*)').order('created_at', { ascending: false });
-    if (oData) setOrders(oData);
+    setLoading(true);
+    try {
+        // Busca Produtos
+        const { data: prodData } = await supabase.from('products').select('*').order('name');
+        if (prodData) setProducts(prodData);
 
-    const { data: payData } = await supabase.from('payments').select('*').order('date', { ascending: false });
-    if (payData) setPayments(payData);
-    
-    setLoadingData(false);
-  }, [session]);
+        // Busca Pedidos (Lógica existente)
+        let orderQuery = supabase.from('orders').select('*, order_items(*)').order('created_at', { ascending: false });
+        const { data: orderData } = await orderQuery;
+        if (orderData) setOrders(orderData);
+
+        // Busca Pagamentos Gerais
+        const { data: payData } = await supabase.from('payments').select('*').order('date', { ascending: false });
+        if (payData) setPayments(payData);
+
+        // --- NOVO: BUSCA CLIENTES E TRANSAÇÕES DO VENDEDOR ---
+        const { data: custData } = await supabase.from('customers').select('*').order('name');
+        if (custData) setCustomers(custData);
+
+        const { data: transData } = await supabase.from('customer_transactions').select('*').order('date', { ascending: false });
+        if (transData) setCustomerTransactions(transData);
+
+    } catch (error) {
+        console.error("Erro ao carregar dados:", error);
+    } finally {
+        setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    if (session) {
-      loadData();
-
-      // --- ATUALIZAÇÃO EM TEMPO REAL ---
-      // Escuta qualquer mudança nas tabelas e recarrega os dados automaticamente
-      const channel = supabase
-        .channel('db-changes')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => loadData())
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, () => loadData())
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'payments' }, () => loadData())
-        .subscribe();
-
-      return () => { supabase.removeChannel(channel); };
-    }
-  }, [session, loadData]);
+    refreshData();
+  }, [session]);
 
   return (
-    <DataContext.Provider value={{ products, orders, payments, loadingData, refreshData: loadData }}>
+    <DataContext.Provider value={{ 
+        products, 
+        orders, 
+        payments, 
+        customers, // Exportando
+        customerTransactions, // Exportando
+        refreshData, 
+        loading 
+    }}>
       {children}
     </DataContext.Provider>
   );
 };
-
-export const useData = () => useContext(DataContext);
