@@ -27,22 +27,34 @@ const SecurityModal = ({ isOpen, sellerName, onConfirm, onCancel }) => {
         </h3>
         
         <p className="text-slate-500 text-sm font-bold mb-6 leading-tight">
-            Esta ação é <strong>irreversível</strong>. Todos os clientes e vendas de <span className="text-red-600">{sellerName}</span> serão apagados.
+            Esta ação é <strong>irreversível</strong>. Todos os clientes e vendas de <span className="text-red-600 font-black">{sellerName}</span> serão apagados.
         </p>
 
         <div className="bg-slate-50 p-4 rounded-2xl mb-6 text-left border border-slate-200">
             <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">
-                Digite <span className="text-slate-800 select-all">"{sellerName}"</span> para confirmar
+                Digite exatamente o nome:
             </label>
+            
+            {/* DESTAQUE VISUAL DO NOME (Sem uppercase forçado) */}
+            <div className="mb-3 bg-white border border-slate-200 p-2 rounded-xl text-center select-none">
+                <span className="font-black text-lg text-slate-800 select-text normal-case">
+                    {sellerName}
+                </span>
+            </div>
+
             <input 
                 type="text" 
-                className="w-full bg-white p-3 rounded-xl border border-slate-200 font-bold text-slate-800 outline-none focus:border-red-400 focus:ring-2 focus:ring-red-100 transition-all"
-                placeholder={sellerName}
+                className="w-full bg-white p-3 rounded-xl border border-slate-200 font-bold text-slate-800 outline-none focus:border-red-400 focus:ring-2 focus:ring-red-100 transition-all placeholder:font-normal placeholder:text-slate-300"
+                placeholder={`Digite "${sellerName}"`}
                 value={confirmationText}
                 onChange={(e) => setConfirmationText(e.target.value)}
-                onPaste={(e) => e.preventDefault()} // <--- Correção: Bloqueia o colar de verdade
+                onPaste={(e) => e.preventDefault()} // Bloqueia Colar
                 autoComplete="off"
             />
+            
+            <p className="text-[10px] text-slate-400 mt-2 font-bold text-center">
+                ⚠️ Respeite maiúsculas e minúsculas
+            </p>
         </div>
         
         <div className="flex gap-3">
