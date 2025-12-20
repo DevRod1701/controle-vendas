@@ -1,6 +1,6 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Plus, DollarSign, Calendar, Search, X, Minus } from 'lucide-react'; // Adicionei Minus
+import { ArrowLeft, Plus, DollarSign, Calendar, Search, X, Minus, MessageCircle } from 'lucide-react'; // Adicionei MessageCircle
 import { useData } from '../../contexts/DataContext';
 import { supabase } from '../../services/supabase';
 import { formatBRL } from '../../utils/formatters';
@@ -14,53 +14,68 @@ const CustomerDetail = () => {
   const customer = customers.find(c => c.id === id);
   const myTrans = customerTransactions.filter(t => t.customer_id === id);
 
-  const [mode, setMode] = useState(null); // 'purchase' | 'payment'
+  const [mode, setMode] = useState(null); 
   const [form, setForm] = useState({ description: '', amount: '', date: new Date().toISOString().split('T')[0] });
   
-  // ESTADOS DE PRODUTO
   const [productSearch, setProductSearch] = useState('');
   const [selectedProductObj, setSelectedProductObj] = useState(null);
-  const [qty, setQty] = useState(1); // Novo estado de quantidade
+  const [qty, setQty] = useState(1);
 
   const [loading, setLoading] = useState(false);
   const [alertInfo, setAlertInfo] = useState(null);
 
-  // Filtra produtos (Só retorna se tiver digitado algo)
-  const filteredProducts = useMemo(() => {
-    if (!productSearch) return []; // Retorna vazio se não digitou
-    return products.filter(p => p.name.toLowerCase().includes(productSearch.toLowerCase()));
-  }, [products, productSearch]);
-
-  const balance = useMemo(() => {
+  // Calcula o saldo atual (antes da nova transação)
+  const currentBalance = useMemo(() => {
     const purchase = myTrans.filter(t => t.type === 'purchase').reduce((acc, t) => acc + Number(t.amount), 0);
     const paid = myTrans.filter(t => t.type === 'payment').reduce((acc, t) => acc + Number(t.amount), 0);
     return purchase - paid;
   }, [myTrans]);
 
-  // Ao selecionar um produto
+  const filteredProducts = useMemo(() => {
+    if (!productSearch) return []; 
+    return products.filter(p => p.name.toLowerCase().includes(productSearch.toLowerCase()));
+  }, [products, productSearch]);
+
+  // --- NOVA FUNÇÃO: ENVIA WHATSAPP ---
+  const sendWhatsAppNotification = (transType, description, amount, newBalance) => {
+    if (!customer.phone) return;
+
+    // Limpa o telefone (deixa só números)
+    let phone = customer.phone.replace(/\D/g, '');
+    // Se não tiver código do país (55), adiciona
+    if (phone.length <= 11) phone = `55${phone}`;
+
+    const emoji = transType === 'purchase' ? '🛒' : '💰';
+    const title = transType === 'purchase' ? 'Compra Registrada' : 'Pagamento Recebido';
+    const signal = transType === 'purchase' ? '+' : '-';
+
+    // Monta a mensagem profissional
+    const message = `*MEU PUDINZINHO* 🍮\n\n` +
+      `Olá, *${customer.name}*!\n` +
+      `${emoji} *${title}*\n\n` +
+      `📝 *Item:* ${description}\n` +
+      `💲 *Valor:* ${formatBRL(amount)}\n` +
+      `📅 *Data:* ${new Date().toLocaleDateString()}\n\n` +
+      `📊 *Seu Saldo Atual:* ${formatBRL(newBalance)}\n\n` +
+      `_Obrigado pela preferência!_`;
+
+    // Cria o link e abre
+    const link = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
+    window.open(link, '_blank');
+  };
+
   const handleSelectProduct = (prod) => {
     setSelectedProductObj(prod);
-    setQty(1); // Reseta para 1
-    setForm({ 
-        ...form, 
-        description: prod.name, 
-        amount: prod.price, // Valor inicial (1x)
-        date: new Date().toISOString().split('T')[0]
-    });
+    setQty(1); 
+    setForm({ ...form, description: prod.name, amount: prod.price, date: new Date().toISOString().split('T')[0] });
     setProductSearch(''); 
   };
 
-  // Ao mudar a quantidade
   const handleQtyChange = (delta) => {
     if (!selectedProductObj) return;
     const newQty = Math.max(1, qty + delta);
     setQty(newQty);
-    
-    // Atualiza o valor total automaticamente
-    setForm(prev => ({
-        ...prev,
-        amount: selectedProductObj.price * newQty
-    }));
+    setForm(prev => ({ ...prev, amount: selectedProductObj.price * newQty }));
   };
 
   const handleChangeProduct = () => {
@@ -73,21 +88,38 @@ const CustomerDetail = () => {
     if (!form.amount || !form.description) return;
     setLoading(true);
     
-    // Se for compra de produto, formata a descrição para incluir a quantidade
     const finalDescription = (mode === 'purchase' && selectedProductObj) 
         ? `${qty}x ${selectedProductObj.name}` 
         : form.description;
+
+    const amountVal = parseFloat(form.amount);
 
     const { error } = await supabase.from('customer_transactions').insert([{
         customer_id: id,
         type: mode,
         description: finalDescription,
-        amount: parseFloat(form.amount),
+        amount: amountVal,
         date: form.date
     }]);
 
     if (!error) {
-        setAlertInfo({ type: 'success', title: 'Sucesso', message: 'Movimentação registrada!' });
+        // Calcula o novo saldo projetado para enviar na mensagem
+        const projectedBalance = mode === 'purchase' 
+            ? currentBalance + amountVal 
+            : currentBalance - amountVal;
+
+        setAlertInfo({ type: 'success', title: 'Sucesso', message: 'Registrado com sucesso!' });
+        
+        // Tenta enviar o WhatsApp se tiver telefone
+        if (customer.phone && customer.phone.length > 8) {
+            setTimeout(() => {
+                const send = confirm("Deseja enviar o comprovante no WhatsApp do cliente?");
+                if (send) {
+                    sendWhatsAppNotification(mode, finalDescription, amountVal, projectedBalance);
+                }
+            }, 500);
+        }
+
         handleCloseModal();
         refreshData();
     } else {
@@ -121,13 +153,15 @@ const CustomerDetail = () => {
         <button onClick={() => navigate('/clientes')} className="p-3 bg-white rounded-2xl shadow-sm"><ArrowLeft size={20}/></button>
         <div>
             <h2 className="text-xl font-black text-slate-800 uppercase leading-none">{customer.name}</h2>
-            <p className="text-xs text-slate-400 font-bold">{customer.phone}</p>
+            <div className="flex items-center gap-1 text-slate-400 font-bold text-xs mt-1">
+                {customer.phone ? <><MessageCircle size={12} className="text-green-500"/> {customer.phone}</> : "Sem telefone"}
+            </div>
         </div>
       </div>
 
-      <div className={`p-6 rounded-[2.5rem] text-center border-2 ${balance > 0 ? 'bg-red-50 border-red-100' : 'bg-green-50 border-green-100'}`}>
-        <p className={`text-xs uppercase font-black tracking-widest ${balance > 0 ? 'text-red-400' : 'text-green-600'}`}>Saldo Devedor</p>
-        <p className={`text-4xl font-black font-mono ${balance > 0 ? 'text-red-500' : 'text-green-600'}`}>{formatBRL(balance)}</p>
+      <div className={`p-6 rounded-[2.5rem] text-center border-2 ${currentBalance > 0 ? 'bg-red-50 border-red-100' : 'bg-green-50 border-green-100'}`}>
+        <p className={`text-xs uppercase font-black tracking-widest ${currentBalance > 0 ? 'text-red-400' : 'text-green-600'}`}>Saldo Devedor</p>
+        <p className={`text-4xl font-black font-mono ${currentBalance > 0 ? 'text-red-500' : 'text-green-600'}`}>{formatBRL(currentBalance)}</p>
       </div>
 
       <div className="flex gap-3">
@@ -161,7 +195,6 @@ const CustomerDetail = () => {
                                 />
                             </div>
                             
-                            {/* A lista só aparece se tiver busca */}
                             {productSearch.length > 0 && (
                                 <div className="max-h-48 overflow-y-auto space-y-2">
                                     {filteredProducts.map(p => (
@@ -188,7 +221,6 @@ const CustomerDetail = () => {
                                 <button onClick={handleChangeProduct} className="text-[10px] bg-white px-3 py-2 rounded-lg font-bold text-slate-500 shadow-sm">Trocar</button>
                             </div>
                             
-                            {/* CONTROLE DE QUANTIDADE */}
                             <div className="flex justify-between items-center bg-white p-2 rounded-xl border border-yellow-200">
                                 <span className="text-xs font-bold text-slate-400 ml-2 uppercase">Quantidade</span>
                                 <div className="flex items-center gap-3">
@@ -204,7 +236,6 @@ const CustomerDetail = () => {
 
             {(mode === 'payment' || selectedProductObj) && (
                 <div className="space-y-4 animate-in fade-in">
-                    {/* Input de Valor (Read-only se for produto, pois calcula auto) */}
                     <div className="flex gap-2">
                         <div className="space-y-1 flex-1">
                             <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Total</label>
@@ -214,7 +245,7 @@ const CustomerDetail = () => {
                                 placeholder="0,00" 
                                 value={form.amount} 
                                 onChange={e => setForm({...form, amount: e.target.value})} 
-                                readOnly={mode === 'purchase'} // Bloqueia edição manual se for produto
+                                readOnly={mode === 'purchase'} 
                             />
                         </div>
                         <div className="space-y-1 w-1/3">
@@ -223,7 +254,6 @@ const CustomerDetail = () => {
                         </div>
                     </div>
                     
-                    {/* Descrição manual só se for pagamento */}
                     {mode === 'payment' && (
                         <div className="space-y-1">
                             <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Descrição</label>
