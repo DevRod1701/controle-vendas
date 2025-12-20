@@ -40,7 +40,8 @@ const SecurityModal = ({ isOpen, sellerName, onConfirm, onCancel }) => {
                 placeholder={sellerName}
                 value={confirmationText}
                 onChange={(e) => setConfirmationText(e.target.value)}
-                autoPaste="off" // Desabilita colar para forçar a digitação (opcional)
+                onPaste={(e) => e.preventDefault()} // <--- Correção: Bloqueia o colar de verdade
+                autoComplete="off"
             />
         </div>
         
