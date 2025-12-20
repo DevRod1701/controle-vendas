@@ -28,11 +28,11 @@ export const printOrder = (order) => {
             margin: 0; 
             padding: 2px 2px 20px 2px; /* Margemzinha de segurança */
             color: #000;
-            font-size: 14px; /* Aumentei a base */
+            font-size: 18px; /* Aumentei a base */
             line-height: 1.2;
           }
 
-          h2 { font-size: 22px; text-align: center; margin: 5px 0; font-weight: 900; }
+          h2 { font-size: 30px; text-align: center; margin: 5px 0; font-weight: 900; }
           p { margin: 2px 0; text-align: center; }
           
           .divider { border-top: 2px dashed #000; margin: 10px 0; }
