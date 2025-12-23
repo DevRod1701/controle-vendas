@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { ArrowLeft, ChevronRight, X, Calendar } from 'lucide-react';
+import { ArrowLeft, ChevronRight, X, Calendar, Image as ImageIcon } from 'lucide-react'; // Adicionado ImageIcon
 import { useData } from '../contexts/DataContext';
 import { useAuth } from '../contexts/AuthContext';
 import { formatBRL } from '../utils/formatters';
@@ -69,7 +69,8 @@ const History = () => {
   if (selectedOrder) return <OrderDetail order={selectedOrder} onClose={() => setSelectedOrder(null)} refreshData={refreshData} />;
 
   return (
-    <div className="p-6 pb-24 space-y-4 animate-in fade-in text-left font-bold">
+    // Ajustado padding-bottom para não cortar conteúdo no mobile
+    <div className="p-6 pb-40 space-y-4 animate-in fade-in text-left font-bold">
       <div className="flex items-center justify-between text-left leading-none mb-2">
         <div className="flex items-center gap-3">
             <button onClick={() => navigate(isAdmin ? '/equipe' : '/')} className="p-3 bg-white rounded-2xl shadow-sm active:scale-90"><ArrowLeft size={20}/></button>
@@ -84,14 +85,12 @@ const History = () => {
           <button onClick={nextMonth} className="p-3 bg-slate-50 rounded-xl active:scale-90"><ChevronRight size={16}/></button>
       </div>
 
-      {/* --- MUDANÇA AQUI: LAYOUT CONDICIONAL DE ADMIN --- */}
       <div className={`grid gap-3 ${isAdmin ? 'grid-cols-2' : 'grid-cols-1'}`}>
            <div className="bg-white p-4 rounded-[2rem] border border-slate-50 shadow-sm">
                 <p className="text-[9px] text-slate-400 uppercase font-black tracking-widest mb-1">Total de Vendas</p>
                 <p className="text-2xl font-black text-slate-800 tracking-tighter">{formatBRL(stats.sales)}</p>
            </div>
            
-           {/* Só mostra comissão se for Admin */}
            {isAdmin && (
              <div className="bg-indigo-50 p-4 rounded-[2rem] border border-indigo-100 shadow-sm">
                   <p className="text-[9px] text-indigo-400 uppercase font-black tracking-widest mb-1">Comissão (20%)</p>
@@ -128,7 +127,40 @@ const History = () => {
             </>
         ) : (
             <>
-               {filteredData.payments.map(p => (<div key={p.id} className="bg-white p-4 rounded-[2rem] border border-green-50 shadow-sm flex justify-between items-center"><div><p className="text-[10px] font-black text-slate-400 uppercase">{new Date(p.date).toLocaleDateString()}</p><p className="font-bold text-slate-800 text-xs mt-1">{p.method}</p></div><p className="font-black font-mono text-green-600">{formatBRL(p.amount)}</p></div>))}
+               {filteredData.payments.map(p => (
+                 <div key={p.id} className="bg-white p-4 rounded-[2rem] border border-green-50 shadow-sm">
+                    <div className="flex justify-between items-center mb-1">
+                        <div>
+                            <p className="text-[10px] font-black text-slate-400 uppercase">{new Date(p.date).toLocaleDateString()}</p>
+                            <p className="font-bold text-slate-800 text-xs mt-1">{p.method}</p>
+                        </div>
+                        <p className="font-black font-mono text-green-600">{formatBRL(p.amount)}</p>
+                    </div>
+
+                    {/* Exibe Observação e Comprovante se existirem (PARTE NOVA) */}
+                    {(p.description || p.proof) && (
+                        <div className="mt-2 pt-2 border-t border-slate-50 flex flex-col gap-2">
+                            {p.description && (
+                                <p className="text-[10px] text-slate-500 font-medium bg-slate-50 p-2 rounded-lg italic border border-slate-100">
+                                    Obs: {p.description}
+                                </p>
+                            )}
+                            {p.proof && (
+                                <button 
+                                    onClick={() => {
+                                        const w = window.open(); 
+                                        w.document.write('<img src="'+p.proof+'" style="max-width:100%"/>');
+                                    }} 
+                                    className="flex items-center gap-1 text-[10px] font-bold text-indigo-500 hover:text-indigo-700 transition-colors bg-indigo-50 p-2 rounded-lg w-fit"
+                                >
+                                    <ImageIcon size={14} /> Ver Comprovante
+                                </button>
+                            )}
+                        </div>
+                    )}
+                 </div>
+               ))}
+               {filteredData.payments.length === 0 && <p className="text-center text-slate-400 py-10 uppercase text-xs font-bold">Sem pagamentos neste mês.</p>}
             </>
         )}
       </div>

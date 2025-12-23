@@ -91,7 +91,7 @@ const SellerDashboard = () => {
         
         <div className="flex gap-2 pt-2">
             <button onClick={() => navigate('/historico')} className="flex-1 py-4 bg-white/10 text-white rounded-2xl font-black text-xs uppercase active:scale-95">Ver Pedidos</button>
-            <button onClick={() => setShowPayModal(true)} className="flex-1 py-4 bg-yellow-400 text-slate-900 rounded-2xl font-black text-xs uppercase active:scale-95 shadow-lg">Pagar Dívida</button>
+            <button onClick={() => setShowPayModal(true)} className="flex-1 py-4 bg-yellow-400 text-slate-900 rounded-2xl font-black text-xs uppercase active:scale-95 shadow-lg">Pagar</button>
         </div>
       </div>
 
