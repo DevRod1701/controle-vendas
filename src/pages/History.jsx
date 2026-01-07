@@ -1,10 +1,12 @@
 import React, { useState, useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { ArrowLeft, ChevronRight, X, Calendar, Image as ImageIcon } from 'lucide-react'; // Adicionado ImageIcon
+import { ArrowLeft, ChevronRight, X, Calendar, Image as ImageIcon, Trash2, Edit2, Save } from 'lucide-react'; // Adicionado Edit2 e Save
 import { useData } from '../contexts/DataContext';
 import { useAuth } from '../contexts/AuthContext';
+import { supabase } from '../services/supabase';
 import { formatBRL } from '../utils/formatters';
 import OrderDetail from '../components/OrderDetail';
+import ConfirmModal from '../components/modals/ConfirmModal';
 
 const History = () => {
   const { orders, payments, refreshData } = useData();
@@ -16,6 +18,12 @@ const History = () => {
   const filterSellerName = location.state?.sellerName;
 
   const [selectedOrder, setSelectedOrder] = useState(null);
+  const [confirmDelete, setConfirmDelete] = useState(null); 
+  
+  // ESTADOS PARA EDIÇÃO DE PAGAMENTO
+  const [editingPayment, setEditingPayment] = useState(null);
+  const [editForm, setEditForm] = useState({ amount: '', date: '', method: '', description: '' });
+  
   const [month, setMonth] = useState(new Date().getMonth());
   const [year, setYear] = useState(new Date().getFullYear());
   const [tab, setTab] = useState('orders'); 
@@ -66,11 +74,106 @@ const History = () => {
   const nextMonth = () => { if(month===11){setMonth(0); setYear(year+1)} else setMonth(month+1) };
   const clearFilter = () => { navigate('/historico', { state: null }); };
 
+  // --- FUNÇÕES DE PAGAMENTO (EXCLUIR E EDITAR) ---
+
+  const handleDeletePayment = async (payment) => {
+    setConfirmDelete(null);
+    const { error } = await supabase.from('payments').delete().eq('id', payment.id);
+    
+    if (!error) {
+        const order = orders.find(o => o.id === payment.order_id);
+        if (order) {
+            const newPaid = Math.max(0, Number(order.paid || 0) - Number(payment.amount));
+            await supabase.from('orders').update({ paid: newPaid }).eq('id', order.id);
+        }
+        refreshData();
+    } else {
+        alert("Erro ao excluir pagamento.");
+    }
+  };
+
+  const startEditingPayment = (payment) => {
+      setEditingPayment(payment);
+      setEditForm({
+          amount: payment.amount,
+          date: payment.date,
+          method: payment.method,
+          description: payment.description || ''
+      });
+  };
+
+  const handleUpdatePayment = async () => {
+      if (!editingPayment) return;
+      
+      const oldAmount = Number(editingPayment.amount);
+      const newAmount = Number(editForm.amount);
+      const delta = newAmount - oldAmount; // Diferença para ajustar no pedido
+
+      const { error } = await supabase.from('payments').update({
+          amount: newAmount,
+          date: editForm.date,
+          method: editForm.method,
+          description: editForm.description
+      }).eq('id', editingPayment.id);
+
+      if (!error) {
+          // Atualiza o saldo do pedido
+          const order = orders.find(o => o.id === editingPayment.order_id);
+          if (order) {
+              const newPaid = Number(order.paid || 0) + delta;
+              await supabase.from('orders').update({ paid: newPaid }).eq('id', order.id);
+          }
+          setEditingPayment(null);
+          refreshData();
+      } else {
+          alert("Erro ao atualizar pagamento.");
+      }
+  };
+
   if (selectedOrder) return <OrderDetail order={selectedOrder} onClose={() => setSelectedOrder(null)} refreshData={refreshData} />;
 
   return (
-    // Ajustado padding-bottom para não cortar conteúdo no mobile
     <div className="p-6 pb-40 space-y-4 animate-in fade-in text-left font-bold">
+      
+      {/* Modal de Confirmação de Exclusão */}
+      <ConfirmModal 
+        isOpen={!!confirmDelete}
+        title="Excluir Pagamento?"
+        message={`Deseja remover o registro de ${formatBRL(confirmDelete?.amount)}? O saldo devedor do pedido aumentará.`}
+        onConfirm={() => handleDeletePayment(confirmDelete)}
+        onCancel={() => setConfirmDelete(null)}
+      />
+
+      {/* Modal de Edição de Pagamento */}
+      {editingPayment && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[400] flex items-end sm:items-center justify-center p-4 animate-in fade-in">
+            <div className="bg-white w-full max-w-sm rounded-[2.5rem] p-6 shadow-2xl animate-in slide-in-from-bottom-10 space-y-4">
+                <div className="flex justify-between items-center">
+                    <h3 className="text-lg font-black text-slate-800 uppercase">Editar Pagamento</h3>
+                    <button onClick={() => setEditingPayment(null)} className="p-2 bg-slate-100 rounded-full"><X size={20}/></button>
+                </div>
+                
+                <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase ml-2">Valor</label>
+                    <input type="number" className="w-full p-4 bg-slate-50 rounded-2xl font-bold outline-none border border-slate-100 focus:border-indigo-200" value={editForm.amount} onChange={e => setEditForm({...editForm, amount: e.target.value})} />
+                </div>
+                <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase ml-2">Data</label>
+                    <input type="date" className="w-full p-4 bg-slate-50 rounded-2xl font-bold outline-none border border-slate-100 text-slate-600" value={editForm.date} onChange={e => setEditForm({...editForm, date: e.target.value})} />
+                </div>
+                <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase ml-2">Descrição</label>
+                    <input className="w-full p-4 bg-slate-50 rounded-2xl font-bold outline-none border border-slate-100" value={editForm.description} onChange={e => setEditForm({...editForm, description: e.target.value})} />
+                </div>
+
+                <button onClick={handleUpdatePayment} className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase shadow-lg active:scale-95 flex items-center justify-center gap-2">
+                    <Save size={18}/> Salvar Alterações
+                </button>
+            </div>
+        </div>
+      )}
+
+      {/* Cabeçalho */}
       <div className="flex items-center justify-between text-left leading-none mb-2">
         <div className="flex items-center gap-3">
             <button onClick={() => navigate(isAdmin ? '/equipe' : '/')} className="p-3 bg-white rounded-2xl shadow-sm active:scale-90"><ArrowLeft size={20}/></button>
@@ -128,36 +231,52 @@ const History = () => {
         ) : (
             <>
                {filteredData.payments.map(p => (
-                 <div key={p.id} className="bg-white p-4 rounded-[2rem] border border-green-50 shadow-sm">
-                    <div className="flex justify-between items-center mb-1">
+                 <div key={p.id} className="bg-white p-4 rounded-[2rem] border border-green-50 shadow-sm flex flex-col gap-2">
+                    {/* Linha 1: Dados e Valor */}
+                    <div className="flex justify-between items-start">
                         <div>
                             <p className="text-[10px] font-black text-slate-400 uppercase">{new Date(p.date).toLocaleDateString()}</p>
                             <p className="font-bold text-slate-800 text-xs mt-1">{p.method}</p>
                         </div>
-                        <p className="font-black font-mono text-green-600">{formatBRL(p.amount)}</p>
+                        <p className="font-black font-mono text-green-600 text-lg">{formatBRL(p.amount)}</p>
                     </div>
-
-                    {/* Exibe Observação e Comprovante se existirem (PARTE NOVA) */}
-                    {(p.description || p.proof) && (
-                        <div className="mt-2 pt-2 border-t border-slate-50 flex flex-col gap-2">
-                            {p.description && (
-                                <p className="text-[10px] text-slate-500 font-medium bg-slate-50 p-2 rounded-lg italic border border-slate-100">
-                                    Obs: {p.description}
-                                </p>
-                            )}
-                            {p.proof && (
-                                <button 
-                                    onClick={() => {
-                                        const w = window.open(); 
-                                        w.document.write('<img src="'+p.proof+'" style="max-width:100%"/>');
-                                    }} 
-                                    className="flex items-center gap-1 text-[10px] font-bold text-indigo-500 hover:text-indigo-700 transition-colors bg-indigo-50 p-2 rounded-lg w-fit"
-                                >
-                                    <ImageIcon size={14} /> Ver Comprovante
-                                </button>
-                            )}
-                        </div>
+                    
+                    {/* Linha 2: Observação (se houver) */}
+                    {p.description && (
+                        <p className="text-[10px] text-slate-500 font-medium bg-slate-50 p-2 rounded-lg italic border border-slate-100">
+                            {p.description}
+                        </p>
                     )}
+
+                    {/* Linha 3: Ações (Comprovante, Editar, Excluir) */}
+                    <div className="flex items-center gap-2 mt-1">
+                        {p.proof && (
+                            <button 
+                                onClick={() => {
+                                    const w = window.open(); 
+                                    w.document.write('<img src="'+p.proof+'" style="max-width:100%"/>');
+                                }} 
+                                className="flex items-center gap-1 text-[10px] font-bold text-indigo-500 bg-indigo-50 p-2 rounded-xl active:scale-95 transition-all mr-auto"
+                            >
+                                <ImageIcon size={14} /> Ver Comprovante
+                            </button>
+                        )}
+                        
+                        <div className={`flex gap-2 ${!p.proof ? 'ml-auto' : ''}`}>
+                             <button 
+                                onClick={() => startEditingPayment(p)} 
+                                className="p-2 bg-slate-100 text-slate-400 rounded-xl hover:bg-slate-200 active:scale-90 transition-all"
+                            >
+                                <Edit2 size={16}/>
+                            </button>
+                            <button 
+                                onClick={() => setConfirmDelete(p)} 
+                                className="p-2 bg-red-50 text-red-400 rounded-xl hover:bg-red-100 active:scale-90 transition-all"
+                            >
+                                <Trash2 size={16}/>
+                            </button>
+                        </div>
+                    </div>
                  </div>
                ))}
                {filteredData.payments.length === 0 && <p className="text-center text-slate-400 py-10 uppercase text-xs font-bold">Sem pagamentos neste mês.</p>}

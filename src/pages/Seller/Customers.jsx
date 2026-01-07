@@ -36,6 +36,12 @@ const Customers = () => {
     });
   }, [customers, customerTransactions, search, filterDebt]);
 
+  // NOVO: Calcula o total da dívida visível (apenas quando filtrado)
+  const totalDebtVisible = useMemo(() => {
+    if (!filterDebt) return 0;
+    return customersWithBalance.reduce((acc, c) => acc + c.balance, 0);
+  }, [customersWithBalance, filterDebt]);
+
   const handleCreate = async (e) => {
     e.preventDefault();
     if (!newCustomer.name) return;
@@ -70,11 +76,20 @@ const Customers = () => {
         <button onClick={() => setIsCreating(true)} className="p-4 bg-yellow-400 text-slate-900 rounded-2xl shadow-sm active:scale-95 transition-all"><UserPlus size={20}/></button>
       </div>
 
-      {/* FILTRO DISCRETO */}
-      <div className="flex justify-end px-1">
+      {/* FILTRO DISCRETO COM TOTAL */}
+      {/* Alterado para flex normal para permitir item na esquerda e botão na direita com ml-auto */}
+      <div className="flex items-center px-1">
+         {/* Mostra o total apenas se estiver filtrando */}
+         {filterDebt && (
+            <span className="text-[10px] font-black text-red-500 bg-red-50 px-2 py-1 rounded-md animate-in fade-in">
+               Total: {formatBRL(totalDebtVisible)}
+            </span>
+         )}
+         
+         {/* Botão com ml-auto para sempre ficar na direita */}
          <button 
             onClick={() => setFilterDebt(!filterDebt)} 
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wide transition-all ${
+            className={`ml-auto flex items-center gap-2 px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wide transition-all ${
                 filterDebt 
                 ? 'bg-red-50 text-red-500 border border-red-100' 
                 : 'bg-transparent text-slate-400 hover:bg-slate-100'
