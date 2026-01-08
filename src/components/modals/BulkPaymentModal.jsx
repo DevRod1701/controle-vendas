@@ -3,10 +3,17 @@ import { X, Upload, Loader2, CheckSquare, Square } from 'lucide-react';
 import { formatBRL } from '../../utils/formatters';
 
 const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
-  // Filtra apenas pedidos que têm dívida (Total > Pago)
+  // Filtra apenas pedidos VÁLIDOS para pagamento:
+  // 1. Deve ser Venda (type === 'sale')
+  // 2. Deve estar Aprovado (status === 'approved')
+  // 3. Deve ter Dívida (Total > Pago)
   const unpaidOrders = useMemo(() => {
     return orders
-      .filter(o => (Number(o.total) - Number(o.paid || 0)) > 0.01)
+      .filter(o => 
+        o.type === 'sale' && 
+        o.status === 'approved' && 
+        (Number(o.total) - Number(o.paid || 0)) > 0.01
+      )
       .sort((a, b) => new Date(a.created_at) - new Date(b.created_at)); // Mais antigos primeiro
   }, [orders]);
 
@@ -63,7 +70,6 @@ const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
     
     setIsSubmitting(true);
     try {
-        // Envia também quais pedidos foram selecionados
         await onConfirm(paymentData, selectedIds);
     } catch (e) {
         console.error(e);
@@ -79,14 +85,14 @@ const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
         <div className="flex justify-between items-center mb-2">
           <div>
             <h3 className="text-xl font-black text-slate-800 uppercase leading-none">Pagar Saldo</h3>
-            <p className="text-[10px] text-slate-400 font-bold mt-1">Selecione os pedidos</p>
+            <p className="text-[10px] text-slate-400 font-bold mt-1">Selecione os pedidos aprovados</p>
           </div>
           <button onClick={onClose} className="p-2 bg-slate-100 rounded-full"><X size={20}/></button>
         </div>
         
         {/* Lista de Seleção (Scrollável) */}
         <div className="flex-1 overflow-y-auto space-y-2 min-h-[150px] border border-slate-100 rounded-2xl p-2 bg-slate-50">
-            {unpaidOrders.length === 0 && <p className="text-center text-xs text-slate-400 py-4">Nada pendente!</p>}
+            {unpaidOrders.length === 0 && <p className="text-center text-xs text-slate-400 py-4">Nenhum pedido pendente de pagamento.</p>}
             
             {unpaidOrders.map(order => {
                 const debt = Number(order.total) - Number(order.paid || 0);

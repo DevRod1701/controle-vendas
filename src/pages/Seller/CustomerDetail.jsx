@@ -2,13 +2,13 @@ import React, { useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { 
     ArrowLeft, Plus, DollarSign, Calendar, Search, 
-    X, Minus, MessageCircle, Trash2, Edit2, Save, Share2 
+    X, Minus, MessageCircle, Trash2, Edit2, Save, Share2, CheckSquare, CalendarDays, List
 } from 'lucide-react';
 import { useData } from '../../contexts/DataContext';
 import { supabase } from '../../services/supabase';
 import { formatBRL } from '../../utils/formatters';
 import AlertModal from '../../components/modals/AlertModal';
-import ConfirmModal from '../../components/modals/ConfirmModal'; // Importe o ConfirmModal
+import ConfirmModal from '../../components/modals/ConfirmModal';
 
 const CustomerDetail = () => {
   const { id } = useParams();
@@ -18,23 +18,23 @@ const CustomerDetail = () => {
   const customer = customers.find(c => c.id === id);
   const myTrans = customerTransactions.filter(t => t.customer_id === id);
 
-  // Estados de Edição de Cliente
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState({ name: '', phone: '' });
 
-  // Estados de Transação
   const [mode, setMode] = useState(null); 
   const [form, setForm] = useState({ description: '', amount: '', date: new Date().toISOString().split('T')[0] });
   const [productSearch, setProductSearch] = useState('');
   const [selectedProductObj, setSelectedProductObj] = useState(null);
   const [qty, setQty] = useState(1);
 
-  // Estados de Interface
   const [loading, setLoading] = useState(false);
   const [alertInfo, setAlertInfo] = useState(null);
-  const [confirmDialog, setConfirmDialog] = useState(null); // Estado para confirmações
+  const [confirmDialog, setConfirmDialog] = useState(null);
 
-  // --- CÁLCULOS E FILTROS ---
+  // NOVO: Estado para o Modal de Compartilhamento
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [shareDate, setShareDate] = useState(new Date().toISOString().split('T')[0]);
+
   const currentBalance = useMemo(() => {
     const purchase = myTrans.filter(t => t.type === 'purchase').reduce((acc, t) => acc + Number(t.amount), 0);
     const paid = myTrans.filter(t => t.type === 'payment').reduce((acc, t) => acc + Number(t.amount), 0);
@@ -46,7 +46,7 @@ const CustomerDetail = () => {
     return products.filter(p => p.name.toLowerCase().includes(productSearch.toLowerCase()));
   }, [products, productSearch]);
 
-  // --- FUNÇÕES DE CLIENTE (EDITAR / EXCLUIR / EXTRATO) ---
+  // --- FUNÇÕES DE CLIENTE ---
 
   const startEditing = () => {
     setEditForm({ name: customer.name, phone: customer.phone || '' });
@@ -82,7 +82,6 @@ const CustomerDetail = () => {
   const confirmDeleteCustomer = async () => {
     setConfirmDialog(null);
     setLoading(true);
-    // Ao deletar o cliente, o banco (Cascade) deleta as transações automaticamente
     const { error } = await supabase.from('customers').delete().eq('id', id);
 
     if (!error) {
@@ -97,7 +96,8 @@ const CustomerDetail = () => {
     }
   };
 
-  const sendWhatsAppStatement = () => {
+  // --- NOVA LÓGICA DE COMPARTILHAMENTO ---
+  const handleShareOption = (type) => {
     if (!customer.phone) {
         setAlertInfo({ type: 'error', title: 'Sem Telefone', message: 'Cadastre um telefone para enviar o extrato.' });
         return;
@@ -106,15 +106,36 @@ const CustomerDetail = () => {
     let phone = customer.phone.replace(/\D/g, '');
     if (phone.length <= 11) phone = `55${phone}`;
 
-    // Monta o resumo
-    const historyText = myTrans.map(t => {
+    let filteredTrans = [];
+    let title = "";
+
+    // Filtra as transações com base na escolha
+    if (type === 'all') {
+        filteredTrans = myTrans;
+        title = "EXTRATO COMPLETO";
+    } else if (type === 'today') {
+        const today = new Date().toISOString().split('T')[0];
+        filteredTrans = myTrans.filter(t => t.date === today);
+        title = "RESUMO DE HOJE";
+    } else if (type === 'date') {
+        filteredTrans = myTrans.filter(t => t.date === shareDate);
+        title = `RESUMO DO DIA ${new Date(shareDate).toLocaleDateString()}`;
+    }
+
+    if (filteredTrans.length === 0) {
+        setAlertInfo({ type: 'error', title: 'Vazio', message: 'Nenhuma movimentação encontrada para este filtro.' });
+        return;
+    }
+
+    // Monta o texto
+    const historyText = filteredTrans.map(t => {
         const icon = t.type === 'purchase' ? '🔴' : '🟢';
-        return `${icon} ${new Date(t.date).toLocaleDateString()} - ${t.description}: ${formatBRL(t.amount)}`;
+        return `${icon} ${t.description}: ${formatBRL(t.amount)}`;
     }).join('\n');
 
-    const message = `*EXTRATO COMPLETO - MEU PUDINZINHO* 🍮\n` +
+    const message = `*${title} - MEU PUDINZINHO* 🍮\n` +
       `Cliente: *${customer.name}*\n\n` +
-      `_Histórico de Movimentações:_\n` +
+      `_Detalhes:_\n` +
       `${historyText}\n\n` +
       `-----------------------------\n` +
       `📊 *SALDO DEVEDOR ATUAL: ${formatBRL(currentBalance)}*\n` +
@@ -122,11 +143,11 @@ const CustomerDetail = () => {
 
     const link = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
     window.open(link, '_blank');
+    setShowShareModal(false);
   };
 
-  // --- FUNÇÕES DE TRANSAÇÃO (ADICIONAR / REMOVER) ---
+  // --- FUNÇÕES DE TRANSAÇÃO ---
 
-  // ... (Lógica de seleção de produtos igual ao anterior) ...
   const handleSelectProduct = (prod) => {
     setSelectedProductObj(prod);
     setQty(1); 
@@ -146,7 +167,6 @@ const CustomerDetail = () => {
     setQty(1);
     setForm({ ...form, description: '', amount: '' });
   };
-  // ... (Fim lógica produtos) ...
 
   const handleSaveTransaction = async () => {
     if (!form.amount || !form.description) return;
@@ -202,22 +222,13 @@ const CustomerDetail = () => {
   return (
     <div className="p-6 pb-24 space-y-6 animate-in fade-in font-bold">
       
-      {/* MODAIS GLOBAIS */}
       <AlertModal isOpen={!!alertInfo} type={alertInfo?.type} title={alertInfo?.title} message={alertInfo?.message} onClose={() => setAlertInfo(null)} />
-      
-      <ConfirmModal 
-        isOpen={!!confirmDialog} 
-        title={confirmDialog?.title} 
-        message={confirmDialog?.message} 
-        onCancel={() => setConfirmDialog(null)} 
-        onConfirm={confirmDialog?.action} 
-      />
+      <ConfirmModal isOpen={!!confirmDialog} title={confirmDialog?.title} message={confirmDialog?.message} onCancel={() => setConfirmDialog(null)} onConfirm={confirmDialog?.action} />
 
-      {/* CABEÇALHO (Visualização ou Edição) */}
+      {/* CABEÇALHO */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3 w-full">
             <button onClick={() => navigate('/clientes')} className="p-3 bg-white rounded-2xl shadow-sm"><ArrowLeft size={20}/></button>
-            
             {isEditing ? (
                 <div className="flex-1 flex gap-2 animate-in fade-in">
                     <div className="space-y-1 flex-1">
@@ -238,8 +249,6 @@ const CustomerDetail = () => {
                 </div>
             )}
         </div>
-
-        {/* Botões de Ação do Cliente (Editar/Excluir) - Só aparecem se não estiver editando */}
         {!isEditing && (
             <div className="flex gap-2">
                 <button onClick={startEditing} className="p-3 bg-white text-slate-400 rounded-2xl shadow-sm active:scale-90"><Edit2 size={18}/></button>
@@ -253,15 +262,61 @@ const CustomerDetail = () => {
         <p className={`text-xs uppercase font-black tracking-widest ${currentBalance > 0 ? 'text-red-400' : 'text-green-600'}`}>Saldo Devedor</p>
         <p className={`text-4xl font-black font-mono ${currentBalance > 0 ? 'text-red-500' : 'text-green-600'}`}>{formatBRL(currentBalance)}</p>
         
-        {/* Botão Enviar Extrato */}
+        {/* Botão Enviar Extrato que abre o Menu */}
         <button 
-            onClick={sendWhatsAppStatement} 
-            className="absolute top-4 right-4 p-2 bg-white/50 rounded-full text-slate-600 hover:bg-green-500 hover:text-white transition-colors"
+            onClick={() => setShowShareModal(true)} 
+            className="absolute top-4 right-4 p-2 bg-white/50 rounded-full text-slate-600 hover:bg-green-500 hover:text-white transition-colors active:scale-90"
             title="Enviar Extrato no WhatsApp"
         >
             <Share2 size={18} />
         </button>
       </div>
+
+      {/* MODAL DE OPÇÕES DE COMPARTILHAMENTO */}
+      {showShareModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[400] flex items-end sm:items-center justify-center p-4 animate-in fade-in">
+            <div className="bg-white w-full max-w-sm rounded-[2.5rem] p-6 shadow-2xl animate-in slide-in-from-bottom-10 space-y-4">
+                <div className="flex justify-between items-center mb-2">
+                    <h3 className="text-lg font-black text-slate-800 uppercase">Enviar Extrato</h3>
+                    <button onClick={() => setShowShareModal(false)} className="p-2 bg-slate-100 rounded-full"><X size={20}/></button>
+                </div>
+                
+                <p className="text-xs text-slate-500 font-bold mb-4">O que você deseja enviar para {customer.name}?</p>
+
+                <div className="space-y-2">
+                    <button onClick={() => handleShareOption('today')} className="w-full p-4 bg-green-50 border border-green-100 rounded-2xl flex items-center gap-3 active:scale-95 transition-all">
+                        <div className="p-2 bg-green-200 rounded-full text-green-700"><CheckSquare size={18}/></div>
+                        <div className="text-left">
+                            <p className="font-black text-slate-800 text-sm">Somente Hoje</p>
+                            <p className="text-[10px] text-slate-400 font-bold uppercase">Itens comprados/pagos hoje</p>
+                        </div>
+                    </button>
+
+                    <div className="w-full p-4 bg-yellow-50 border border-yellow-100 rounded-2xl flex flex-col gap-2">
+                        <div className="flex items-center gap-3">
+                            <div className="p-2 bg-yellow-200 rounded-full text-yellow-700"><CalendarDays size={18}/></div>
+                            <div className="text-left">
+                                <p className="font-black text-slate-800 text-sm">Data Específica</p>
+                                <p className="text-[10px] text-slate-400 font-bold uppercase">Escolha um dia</p>
+                            </div>
+                        </div>
+                        <div className="flex gap-2 w-full mt-1">
+                            <input type="date" className="flex-1 p-2 rounded-xl border border-yellow-200 text-sm font-bold text-slate-600 bg-white" value={shareDate} onChange={e => setShareDate(e.target.value)} />
+                            <button onClick={() => handleShareOption('date')} className="px-4 bg-yellow-400 rounded-xl font-black text-xs uppercase active:scale-95">Enviar</button>
+                        </div>
+                    </div>
+
+                    <button onClick={() => handleShareOption('all')} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl flex items-center gap-3 active:scale-95 transition-all">
+                        <div className="p-2 bg-slate-200 rounded-full text-slate-600"><List size={18}/></div>
+                        <div className="text-left">
+                            <p className="font-black text-slate-800 text-sm">Histórico Completo</p>
+                            <p className="text-[10px] text-slate-400 font-bold uppercase">Tudo desde o início</p>
+                        </div>
+                    </button>
+                </div>
+            </div>
+        </div>
+      )}
 
       {/* Botões Principais */}
       <div className="flex gap-3">
@@ -273,7 +328,7 @@ const CustomerDetail = () => {
         </button>
       </div>
 
-      {/* MODAL DE TRANSAÇÃO (Compra ou Pagamento) */}
+      {/* MODAL DE TRANSAÇÃO (Mantido igual) */}
       {mode && (
         <div className="bg-white p-6 rounded-[2.5rem] shadow-2xl border-2 border-slate-100 animate-in slide-in-from-bottom-10 space-y-4 fixed bottom-0 left-0 right-0 z-50 m-2 max-h-[85vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-2">
@@ -379,7 +434,6 @@ const CustomerDetail = () => {
                     <p className={`font-mono font-black ${t.type === 'purchase' ? 'text-red-400' : 'text-green-500'}`}>
                         {t.type === 'purchase' ? '-' : '+'} {formatBRL(t.amount)}
                     </p>
-                    {/* Botão de Excluir Transação com Confirmação */}
                     <button onClick={() => requestDeleteTransaction(t.id)} className="text-[9px] text-red-300 font-bold uppercase mt-1 p-1 hover:text-red-500">Apagar</button>
                 </div>
             </div>

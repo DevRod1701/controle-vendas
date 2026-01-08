@@ -34,7 +34,10 @@ const OrderDetail = ({ order, onClose, refreshData }) => {
 
   const pendente = Number(order.total) - Number(order.paid || 0);
   const isFullyPaid = pendente <= 0.01;
-  const canPay = order.status === 'approved';
+  
+  // TRAVA DE PAGAMENTO: Só Vendas Aprovadas
+  // Devoluções (type='return') ou Pedidos Pendentes (status='pending') NÃO podem ser pagos
+  const canPay = order.status === 'approved' && order.type === 'sale';
 
   const handleFileChange = (e) => {
     const file = e.target.files[0];
@@ -46,8 +49,9 @@ const OrderDetail = ({ order, onClose, refreshData }) => {
   };
 
   const handlePay = async () => {
+    // Verificação de Segurança
     if (!canPay) {
-        setAlertInfo({ type: 'error', title: 'Bloqueado', message: 'Este pedido aguarda aprovação do administrador.' });
+        setAlertInfo({ type: 'error', title: 'Bloqueado', message: 'Apenas vendas aprovadas podem receber pagamento.' });
         return;
     }
     if (isSubmitting || !paymentData.amount) return;
@@ -104,7 +108,7 @@ const OrderDetail = ({ order, onClose, refreshData }) => {
     <div className="fixed inset-0 bg-white z-[150] animate-in slide-in-from-right overflow-y-auto font-bold">
       {renderAlert()}
       
-      {/* AQUI ESTÁ A CORREÇÃO PRINCIPAL: pb-60 */}
+      {/* pb-60 garante que o conteúdo não fique escondido atrás dos botões no mobile */}
       <div className="p-6 pb-60 space-y-6">
         
         <div className="flex justify-between items-center">
@@ -121,7 +125,14 @@ const OrderDetail = ({ order, onClose, refreshData }) => {
               <div className="text-green-600">Pago: {formatBRL(order.paid)}</div>
               {order.type !== 'return' && <div className="text-red-500">Falta: {formatBRL(pendente)}</div>}
            </div>
-           {!canPay && order.status === 'pending' && <div className="mt-4 bg-yellow-100 p-2 rounded-xl text-[10px] font-black text-yellow-700 uppercase flex items-center justify-center gap-2"><AlertCircle size={12}/> Aguardando Aprovação</div>}
+           
+           {/* AVISO VISUAL: Se não puder pagar, mostra o motivo */}
+           {!canPay && (
+               <div className="mt-4 bg-gray-100 p-2 rounded-xl text-[10px] font-black text-gray-500 uppercase flex items-center justify-center gap-2">
+                   <AlertCircle size={12}/> 
+                   {order.type === 'return' ? 'Devolução (Não Pagável)' : 'Aguardando Aprovação'}
+               </div>
+           )}
         </div>
 
         <div>
@@ -136,7 +147,12 @@ const OrderDetail = ({ order, onClose, refreshData }) => {
         {payments.length > 0 && (<div><h3 className="text-sm font-black text-slate-800 uppercase mb-3">Histórico de Pagamentos</h3><div className="space-y-2">{payments.map((p, i) => (<div key={i} className="flex justify-between p-4 bg-green-50 border border-green-100 rounded-2xl"><div><p className="font-bold text-green-800">{p.method}</p><p className="text-[10px] text-green-600">{new Date(p.date).toLocaleDateString()}</p></div><div className="text-right"><p className="font-mono font-bold text-green-700">{formatBRL(p.amount)}</p>{p.proof && <button onClick={() => {const w = window.open(); w.document.write('<img src="'+p.proof+'" style="max-width:100%"/>');}} className="text-[10px] underline text-green-600 font-bold flex items-center gap-1 justify-end mt-1"><ImageIcon size={12}/> Ver Comp.</button>}</div></div>))}</div></div>)}
 
         <div className="fixed bottom-0 left-0 right-0 p-6 bg-white border-t border-slate-100 flex flex-col gap-3">
-          {pendente > 0 && canPay && <button onClick={() => setIsPaying(true)} className="w-full py-4 bg-slate-900 text-white rounded-2xl font-bold uppercase shadow-lg flex items-center justify-center gap-2"><DollarSign size={20}/> Pagar</button>}
+          {/* BOTÃO DE PAGAR: Condicionado à aprovação e saldo devedor */}
+          {pendente > 0 && canPay && (
+              <button onClick={() => setIsPaying(true)} className="w-full py-4 bg-slate-900 text-white rounded-2xl font-bold uppercase shadow-lg flex items-center justify-center gap-2">
+                  <DollarSign size={20}/> Pagar
+              </button>
+          )}
           
           {/* BOTÃO DE IMPRIMIR */}
           {isAdmin && order.status === 'approved' && (
