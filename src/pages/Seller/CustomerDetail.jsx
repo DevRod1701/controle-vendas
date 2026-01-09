@@ -18,11 +18,31 @@ const CustomerDetail = () => {
   const customer = customers.find(c => c.id === id);
   const myTrans = customerTransactions.filter(t => t.customer_id === id);
 
+  // --- FUNÇÕES AUXILIARES DE DATA (CORREÇÃO DE FUSO HORÁRIO) ---
+  
+  // Pega a data local correta (YYYY-MM-DD) sem converter para UTC
+  const getTodayLocal = () => {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  // Formata YYYY-MM-DD para DD/MM/AAAA sem alterar o dia
+  const formatDateDisplay = (dateString) => {
+    if (!dateString) return '';
+    const parts = dateString.split('-');
+    if (parts.length !== 3) return dateString;
+    return `${parts[2]}/${parts[1]}/${parts[0]}`;
+  };
+
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState({ name: '', phone: '' });
 
   const [mode, setMode] = useState(null); 
-  const [form, setForm] = useState({ description: '', amount: '', date: new Date().toISOString().split('T')[0] });
+  // CORREÇÃO: Usa getTodayLocal() no lugar de toISOString()
+  const [form, setForm] = useState({ description: '', amount: '', date: getTodayLocal() });
   const [productSearch, setProductSearch] = useState('');
   const [selectedProductObj, setSelectedProductObj] = useState(null);
   const [qty, setQty] = useState(1);
@@ -33,7 +53,8 @@ const CustomerDetail = () => {
 
   // NOVO: Estado para o Modal de Compartilhamento
   const [showShareModal, setShowShareModal] = useState(false);
-  const [shareDate, setShareDate] = useState(new Date().toISOString().split('T')[0]);
+  // CORREÇÃO: Usa getTodayLocal()
+  const [shareDate, setShareDate] = useState(getTodayLocal());
 
   const currentBalance = useMemo(() => {
     const purchase = myTrans.filter(t => t.type === 'purchase').reduce((acc, t) => acc + Number(t.amount), 0);
@@ -114,12 +135,14 @@ const CustomerDetail = () => {
         filteredTrans = myTrans;
         title = "EXTRATO COMPLETO";
     } else if (type === 'today') {
-        const today = new Date().toISOString().split('T')[0];
+        // CORREÇÃO: Usa getTodayLocal() para garantir que "hoje" é hoje mesmo
+        const today = getTodayLocal();
         filteredTrans = myTrans.filter(t => t.date === today);
         title = "RESUMO DE HOJE";
     } else if (type === 'date') {
         filteredTrans = myTrans.filter(t => t.date === shareDate);
-        title = `RESUMO DO DIA ${new Date(shareDate).toLocaleDateString()}`;
+        // CORREÇÃO: Usa formatDateDisplay no título
+        title = `RESUMO DO DIA ${formatDateDisplay(shareDate)}`;
     }
 
     if (filteredTrans.length === 0) {
@@ -130,7 +153,8 @@ const CustomerDetail = () => {
     // Monta o texto
     const historyText = filteredTrans.map(t => {
         const icon = t.type === 'purchase' ? '🔴' : '🟢';
-        return `${icon} ${t.description}: ${formatBRL(t.amount)}`;
+        // CORREÇÃO: Usa formatDateDisplay na lista do WhatsApp também
+        return `${icon} ${formatDateDisplay(t.date)} - ${t.description}: ${formatBRL(t.amount)}`;
     }).join('\n');
 
     const message = `*${title} - MEU PUDINZINHO* 🍮\n` +
@@ -151,7 +175,8 @@ const CustomerDetail = () => {
   const handleSelectProduct = (prod) => {
     setSelectedProductObj(prod);
     setQty(1); 
-    setForm({ ...form, description: prod.name, amount: prod.price, date: new Date().toISOString().split('T')[0] });
+    // CORREÇÃO: Usa getTodayLocal()
+    setForm({ ...form, description: prod.name, amount: prod.price, date: getTodayLocal() });
     setProductSearch(''); 
   };
 
@@ -197,7 +222,8 @@ const CustomerDetail = () => {
 
   const handleCloseModal = () => {
     setMode(null);
-    setForm({ description: '', amount: '', date: new Date().toISOString().split('T')[0] });
+    // CORREÇÃO: Reseta data para hoje local
+    setForm({ description: '', amount: '', date: getTodayLocal() });
     setSelectedProductObj(null);
     setProductSearch('');
     setQty(1);
@@ -274,7 +300,7 @@ const CustomerDetail = () => {
 
       {/* MODAL DE OPÇÕES DE COMPARTILHAMENTO */}
       {showShareModal && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[400] flex items-end sm:items-center justify-center p-4 animate-in fade-in">
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[350] flex items-end sm:items-center justify-center p-4 animate-in fade-in">
             <div className="bg-white w-full max-w-sm rounded-[2.5rem] p-6 shadow-2xl animate-in slide-in-from-bottom-10 space-y-4">
                 <div className="flex justify-between items-center mb-2">
                     <h3 className="text-lg font-black text-slate-800 uppercase">Enviar Extrato</h3>
@@ -328,7 +354,7 @@ const CustomerDetail = () => {
         </button>
       </div>
 
-      {/* MODAL DE TRANSAÇÃO (Mantido igual) */}
+      {/* MODAL DE TRANSAÇÃO */}
       {mode && (
         <div className="bg-white p-6 rounded-[2.5rem] shadow-2xl border-2 border-slate-100 animate-in slide-in-from-bottom-10 space-y-4 fixed bottom-0 left-0 right-0 z-50 m-2 max-h-[85vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-2">
@@ -427,7 +453,8 @@ const CustomerDetail = () => {
                     </div>
                     <div>
                         <p className="font-black text-slate-800 text-sm">{t.description}</p>
-                        <p className="text-[10px] text-slate-400 font-bold">{new Date(t.date).toLocaleDateString()}</p>
+                        {/* CORREÇÃO: Usa formatDateDisplay aqui também */}
+                        <p className="text-[10px] text-slate-400 font-bold">{formatDateDisplay(t.date)}</p>
                     </div>
                 </div>
                 <div className="text-right">
