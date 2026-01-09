@@ -11,7 +11,7 @@ import Dashboard from './pages/Dashboard';
 import Catalog from './pages/Catalog';
 import History from './pages/History';
 
-// Páginas do Vendedor (NOVAS)
+// Páginas do Vendedor
 import Customers from './pages/Seller/Customers';
 import CustomerDetail from './pages/Seller/CustomerDetail';
 
@@ -20,6 +20,7 @@ import Stock from './pages/Admin/Stock';
 import Team from './pages/Admin/Team';
 import Approvals from './pages/Admin/Approvals';
 import NewSeller from './pages/Admin/NewSeller';
+import Reports from './pages/Admin/Reports';
 
 const PrivateRoute = ({ children }) => {
   const { session, loading } = useAuth();
@@ -45,25 +46,23 @@ const AppRoutes = () => {
     <Routes>
       <Route path="/login" element={<Login />} />
 
-      {/* Todas as rotas dentro do Layout são protegidas */}
       <Route element={<PrivateRoute><Layout /></PrivateRoute>}>
-        {/* Rotas Gerais */}
         <Route path="/" element={<Dashboard />} />
         <Route path="/catalogo" element={<Catalog />} />
         <Route path="/historico" element={<History />} />
         
-        {/* Rotas do Vendedor (Caderninho) - NOVAS ROTAS */}
+        {/* Vendedor */}
         <Route path="/clientes" element={<Customers />} />
         <Route path="/clientes/:id" element={<CustomerDetail />} />
         
-        {/* Rotas de Admin */}
+        {/* Admin */}
         <Route path="/estoque" element={<Stock />} />
         <Route path="/equipe" element={<Team />} />
         <Route path="/aprovacoes" element={<Approvals />} />
         <Route path="/novo-vendedor" element={<NewSeller />} />
+        <Route path="/relatorios" element={<Reports />} />
       </Route>
 
-      {/* Rota coringa */}
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
