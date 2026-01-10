@@ -21,6 +21,7 @@ import Team from './pages/Admin/Team';
 import Approvals from './pages/Admin/Approvals';
 import NewSeller from './pages/Admin/NewSeller';
 import Reports from './pages/Admin/Reports';
+import RetroImport from './pages/Admin/RetroImport'; // <--- NOVO IMPORT
 
 const PrivateRoute = ({ children }) => {
   const { session, loading } = useAuth();
@@ -61,6 +62,7 @@ const AppRoutes = () => {
         <Route path="/aprovacoes" element={<Approvals />} />
         <Route path="/novo-vendedor" element={<NewSeller />} />
         <Route path="/relatorios" element={<Reports />} />
+        <Route path="/importar" element={<RetroImport />} /> {/* <--- NOVA ROTA */}
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />

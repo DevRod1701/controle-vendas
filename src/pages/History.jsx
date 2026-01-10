@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { ArrowLeft, ChevronRight, X, Calendar, Image as ImageIcon, Trash2, Edit2, Save } from 'lucide-react';
+import { ArrowLeft, ChevronRight, X, Calendar, Image as ImageIcon, Trash2, Edit2, Save, Link } from 'lucide-react'; // Adicionei Link
 import { useData } from '../contexts/DataContext';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../services/supabase';
@@ -34,6 +34,7 @@ const History = () => {
     let myOrders = orders;
     let myPayments = payments;
 
+    // 1. Filtra por Vendedor (Admin ou Logado)
     if (!isAdmin) {
         myOrders = orders.filter(o => o.seller_id === session?.user?.id);
         myPayments = payments.filter(p => {
@@ -48,16 +49,23 @@ const History = () => {
         });
     }
 
+    // 2. Filtra por Data (Mês/Ano)
+    // PEDIDOS: Usa a data de criação do pedido
     const ordersInMonth = myOrders.filter(o => {
         const d = new Date(o.created_at);
         return o.status !== 'rejected' && d.getMonth() === month && d.getFullYear() === year;
     }).sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
 
+    // PAGAMENTOS: AGORA USA A DATA DO PEDIDO ORIGINAL (Competência)
     const paymentsInMonth = myPayments.filter(p => {
-        const d = new Date(p.date);
-        if (!p.date) return false;
-        return d.getMonth() === month && d.getFullYear() === year;
-    }).sort((a,b) => new Date(b.date) - new Date(a.date));
+        // Busca o pedido original para ver a data dele
+        const originalOrder = orders.find(o => o.id === p.order_id);
+        
+        // Se achou o pedido, usa a data do pedido. Se não (erro de dados), usa a data do pagamento.
+        const referenceDate = originalOrder ? new Date(originalOrder.created_at) : new Date(p.date);
+        
+        return referenceDate.getMonth() === month && referenceDate.getFullYear() === year;
+    }).sort((a,b) => new Date(b.date) - new Date(a.date)); // Ordena por data de pagamento (mais recente primeiro)
 
     return { orders: ordersInMonth, payments: paymentsInMonth };
   }, [orders, payments, isAdmin, session, month, year, filterSellerId]);
@@ -67,7 +75,13 @@ const History = () => {
         if (o.type === 'sale' && o.status === 'approved') return acc + Number(o.total || 0);
         return acc;
     }, 0);
-    return { sales: totalSales, commission: totalSales * 0.20 };
+
+    const totalPaid = filteredData.orders.reduce((acc, o) => {
+        if (o.type === 'sale' && o.status === 'approved') return acc + Number(o.paid || 0);
+        return acc;
+    }, 0);
+
+    return { sales: totalSales, paid: totalPaid };
   }, [filteredData]);
 
   const prevMonth = () => { if(month===0){setMonth(11); setYear(year-1)} else setMonth(month-1) };
@@ -107,7 +121,7 @@ const History = () => {
       
       const oldAmount = Number(editingPayment.amount);
       const newAmount = Number(editForm.amount);
-      const delta = newAmount - oldAmount; // Diferença para ajustar no pedido
+      const delta = newAmount - oldAmount;
 
       const { error } = await supabase.from('payments').update({
           amount: newAmount,
@@ -117,7 +131,6 @@ const History = () => {
       }).eq('id', editingPayment.id);
 
       if (!error) {
-          // Atualiza o saldo do pedido
           const order = orders.find(o => o.id === editingPayment.order_id);
           if (order) {
               const newPaid = Number(order.paid || 0) + delta;
@@ -188,18 +201,15 @@ const History = () => {
           <button onClick={nextMonth} className="p-3 bg-slate-50 rounded-xl active:scale-90"><ChevronRight size={16}/></button>
       </div>
 
-      <div className={`grid gap-3 ${isAdmin ? 'grid-cols-2' : 'grid-cols-1'}`}>
+      <div className="grid grid-cols-2 gap-3">
            <div className="bg-white p-4 rounded-[2rem] border border-slate-50 shadow-sm">
                 <p className="text-[9px] text-slate-400 uppercase font-black tracking-widest mb-1">Total de Vendas</p>
                 <p className="text-2xl font-black text-slate-800 tracking-tighter">{formatBRL(stats.sales)}</p>
            </div>
-           
-           {isAdmin && (
-             <div className="bg-indigo-50 p-4 rounded-[2rem] border border-indigo-100 shadow-sm">
-                  <p className="text-[9px] text-indigo-400 uppercase font-black tracking-widest mb-1">Comissão (20%)</p>
-                  <p className="text-2xl font-black text-indigo-600 tracking-tighter">{formatBRL(stats.commission)}</p>
-             </div>
-           )}
+           <div className="bg-blue-50 p-4 rounded-[2rem] border border-blue-100 shadow-sm">
+                <p className="text-[9px] text-blue-600 font-black uppercase tracking-widest mb-1">Total Pago</p>
+                <p className="text-2xl font-black text-blue-700 tracking-tighter">{formatBRL(stats.paid)}</p>
+           </div>
       </div>
 
       <div className="flex gap-2 p-1 bg-slate-100 rounded-xl mt-2">
@@ -230,59 +240,72 @@ const History = () => {
             </>
         ) : (
             <>
-               {filteredData.payments.map(p => (
-                 <div key={p.id} className="bg-white p-4 rounded-[2rem] border border-green-50 shadow-sm flex flex-col gap-2">
-                    {/* Linha 1: Dados e Valor */}
+               {filteredData.payments.map(p => {
+                 // Busca o pedido original para mostrar a data correta
+                 const originalOrder = orders.find(o => o.id === p.order_id);
+                 // Data de referência (para mostrar que é de outro mês se necessário)
+                 const refDate = originalOrder ? new Date(originalOrder.created_at) : new Date(p.date);
+                 const isDifferentMonth = refDate.getMonth() !== new Date(p.date).getMonth();
+
+                 return (
+                 <div key={p.id} className="bg-white p-4 rounded-[2rem] border border-green-50 shadow-sm flex flex-col gap-2 relative">
                     <div className="flex justify-between items-start">
                         <div>
-                            <p className="text-[10px] font-black text-slate-400 uppercase">{new Date(p.date).toLocaleDateString()}</p>
+                            {/* Mostra data do pagamento */}
+                            <p className="text-[10px] font-black text-slate-400 uppercase">Pago em: {new Date(p.date).toLocaleDateString()}</p>
                             <p className="font-bold text-slate-800 text-xs mt-1">{p.method}</p>
+                            
+                            {/* Se o pedido for de outro mês/dia, mostra a referência */}
+                            {originalOrder && (
+                                <p className="text-[9px] text-indigo-400 font-bold mt-1 flex items-center gap-1">
+                                    <Link size={10}/> Ref. Pedido {refDate.toLocaleDateString()}
+                                </p>
+                            )}
                         </div>
                         <p className="font-black font-mono text-green-600 text-lg">{formatBRL(p.amount)}</p>
                     </div>
                     
-                    {/* Linha 2: Observação (se houver) */}
-                    {p.description && (
-                        <p className="text-[10px] text-slate-500 font-medium bg-slate-50 p-2 rounded-lg italic border border-slate-100">
-                            {p.description}
-                        </p>
+                    {(p.description || p.proof) && (
+                        <div className="mt-2 pt-2 border-t border-slate-50 flex flex-col gap-2">
+                            {p.description && (
+                                <p className="text-[10px] text-slate-500 font-medium bg-slate-50 p-2 rounded-lg italic border border-slate-100">
+                                    {p.description}
+                                </p>
+                            )}
+                            {p.proof && (
+                                <button 
+                                    onClick={() => {
+                                        const w = window.open(); 
+                                        w.document.write('<img src="'+p.proof+'" style="max-width:100%"/>');
+                                    }} 
+                                    className="flex items-center gap-1 text-[10px] font-bold text-indigo-500 bg-indigo-50 p-2 rounded-xl active:scale-95 transition-all mr-auto"
+                                >
+                                    <ImageIcon size={14} /> Ver Comprovante
+                                </button>
+                            )}
+                        </div>
                     )}
 
-                    {/* Linha 3: Ações (Comprovante, Editar, Excluir) */}
-                    <div className="flex items-center gap-2 mt-1">
-                        {p.proof && (
+                    {/* Botões de Ação (Só se não for Admin) */}
+                    {!isAdmin && (
+                        <div className="absolute top-4 right-4 flex gap-2">
                             <button 
-                                onClick={() => {
-                                    const w = window.open(); 
-                                    w.document.write('<img src="'+p.proof+'" style="max-width:100%"/>');
-                                }} 
-                                className="flex items-center gap-1 text-[10px] font-bold text-indigo-500 bg-indigo-50 p-2 rounded-xl active:scale-95 transition-all mr-auto"
+                                onClick={() => startEditingPayment(p)} 
+                                className="p-2 bg-slate-100 text-slate-400 rounded-xl hover:bg-slate-200 active:scale-90 transition-all"
                             >
-                                <ImageIcon size={14} /> Ver Comprovante
+                                <Edit2 size={16}/>
                             </button>
-                        )}
-                        
-                        {/* BOTÕES DE EDIÇÃO/EXCLUSÃO (Somente se não for Admin) */}
-                        {!isAdmin && (
-                            <div className={`flex gap-2 ${!p.proof ? 'ml-auto' : ''}`}>
-                                <button 
-                                    onClick={() => startEditingPayment(p)} 
-                                    className="p-2 bg-slate-100 text-slate-400 rounded-xl hover:bg-slate-200 active:scale-90 transition-all"
-                                >
-                                    <Edit2 size={16}/>
-                                </button>
-                                <button 
-                                    onClick={() => setConfirmDelete(p)} 
-                                    className="p-2 bg-red-50 text-red-400 rounded-xl hover:bg-red-100 active:scale-90 transition-all"
-                                >
-                                    <Trash2 size={16}/>
-                                </button>
-                            </div>
-                        )}
-                    </div>
+                            <button 
+                                onClick={() => setConfirmDelete(p)} 
+                                className="p-2 bg-red-50 text-red-400 rounded-xl hover:bg-red-100 active:scale-90 transition-all"
+                            >
+                                <Trash2 size={16}/>
+                            </button>
+                        </div>
+                    )}
                  </div>
-               ))}
-               {filteredData.payments.length === 0 && <p className="text-center text-slate-400 py-10 uppercase text-xs font-bold">Sem pagamentos neste mês.</p>}
+               )})}
+               {filteredData.payments.length === 0 && <p className="text-center text-slate-400 py-10 uppercase text-xs font-bold">Sem pagamentos vinculados a pedidos deste mês.</p>}
             </>
         )}
       </div>
