@@ -62,13 +62,17 @@ const Reports = () => {
         return matchDate && matchSeller && matchStatus;
     });
 
-    // Filtra Pagamentos
+    // Filtra Pagamentos (Lógica ajustada para COMPETÊNCIA)
     const filteredPayments = payments.filter(p => {
-        const d = new Date(p.date);
-        const pDate = new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 12, 0, 0);
-        const matchDate = pDate >= start && pDate <= end;
-        
+        // Encontra o pedido original para usar a data DELE como referência
         const originalOrder = orders.find(o => o.id === p.order_id);
+        
+        // Se o pedido existir, usa a data do pedido (competência). 
+        // Se não (pagamento avulso/erro), usa a data do pagamento.
+        const referenceDate = originalOrder ? new Date(originalOrder.created_at) : new Date(p.date + 'T12:00:00');
+        
+        const matchDate = referenceDate >= start && referenceDate <= end;
+        
         const matchSeller = selectedSeller === 'all' || (originalOrder && originalOrder.seller_id === selectedSeller);
         
         return matchDate && matchSeller;
@@ -219,7 +223,7 @@ const Reports = () => {
             <button onClick={() => navigate('/')} className="p-3 bg-white rounded-2xl shadow-sm"><ArrowLeft size={20}/></button>
             <h2 className="text-xl font-black text-slate-800 uppercase">Relatórios</h2>
         </div>
-        <button onClick={generateThermalReport} className="p-3 bg-slate-900 text-white rounded-2xl shadow-sm active:scale-90">
+        <button onClick={generateThermalReport} className="p-3 bg-indigo-50 text-indigo-600 rounded-2xl shadow-sm active:scale-90">
             <Printer size={20}/>
         </button>
       </div>
@@ -414,8 +418,8 @@ const Reports = () => {
       )}
 
       {/* 3. EXTRATO DETALHADO */}
-      <div className="space-y-4 pt-4 border-t border-slate-100 print:hidden">
-        <h3 className="text-sm font-black text-slate-800 uppercase ml-2 flex items-center gap-2"><FileText size={16}/> Extrato Detalhado</h3>
+      <div className="space-y-4 pt-4 border-t border-slate-100 print:border-black">
+        <h3 className="text-sm font-black text-slate-800 print:text-black uppercase ml-2 flex items-center gap-2"><FileText size={16}/> Extrato Detalhado</h3>
         
         {/* LISTA DE PEDIDOS */}
         {(reportType !== 'payments') && filteredData.orders.map(o => (
@@ -436,20 +440,30 @@ const Reports = () => {
         ))}
 
         {/* LISTA DE PAGAMENTOS */}
-        {(reportType !== 'orders') && filteredData.payments.map(p => (
+        {(reportType !== 'orders') && filteredData.payments.map(p => {
+             // Encontra o pedido original para mostrar a data correta
+             const originalOrder = orders.find(o => o.id === p.order_id);
+             // Data de referência: Pedido ou Pagamento
+             const refDate = originalOrder ? new Date(originalOrder.created_at) : new Date(p.date + 'T12:00:00');
+
+            return (
             <div key={p.id} className="bg-white p-4 rounded-[1.5rem] border border-green-50 flex justify-between items-center text-xs shadow-sm">
                 <div>
                     <p className="font-black text-green-800">{new Date(p.date).toLocaleDateString()} - Pagamento</p>
                     <p className="text-green-600 font-bold mt-0.5">{p.method} {p.description ? `(${p.description})` : ''}</p>
+                    {/* Se for pagamento de outro mês, mostra a origem */}
+                    {originalOrder && (
+                        <p className="text-[9px] text-slate-400 mt-1">Ref. Pedido: {refDate.toLocaleDateString()}</p>
+                    )}
                 </div>
                 <p className="font-mono font-black text-green-600">
                     {formatBRL(p.amount)}
                 </p>
             </div>
-        ))}
+        )})}
 
         {(filteredData.orders.length === 0 && filteredData.payments.length === 0) && (
-            <p className="text-center text-slate-400 text-xs py-8">Nada encontrado neste período.</p>
+            <p className="text-center text-slate-400 text-xs py-8">Nada encontrado.</p>
         )}
       </div>
     </div>

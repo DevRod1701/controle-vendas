@@ -19,11 +19,12 @@ const Team = () => {
   const [sellerToCalculate, setSellerToCalculate] = useState(null);
   
   const [profiles, setProfiles] = useState([]);
+
+  // Estado para controle do mês selecionado (Padrão: Hoje)
   const [selectedDate, setSelectedDate] = useState(new Date());
 
   const months = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
 
-  // Função para recarregar perfis (útil quando salvar nova comissão)
   const fetchProfiles = async () => {
     const { data } = await supabase.from('profiles').select('*').eq('role', 'vendedor');
     if (data) setProfiles(data);
@@ -31,8 +32,9 @@ const Team = () => {
 
   useEffect(() => {
     fetchProfiles();
-  }, [orders]); // Recarrega também quando orders mudar, mas idealmente seria só no mount ou refresh manual
+  }, [orders]);
 
+  // Funções de navegação de data
   const prevMonth = () => {
     const newDate = new Date(selectedDate);
     newDate.setMonth(selectedDate.getMonth() - 1);
@@ -45,6 +47,7 @@ const Team = () => {
     setSelectedDate(newDate);
   };
 
+  // Helper para verificar se uma data pertence ao mês selecionado
   const isInSelectedMonth = (dateString) => {
     if (!dateString) return false;
     const d = new Date(dateString);
@@ -55,12 +58,12 @@ const Team = () => {
   const sellers = useMemo(() => {
     const sellerMap = {};
     
+    // 1. Inicializa vendedores
     profiles.forEach(p => {
         sellerMap[p.id] = {
             id: p.id,
             name: p.full_name || p.name || 'Sem Nome',
-            // Pega a comissão salva ou usa 20 como padrão
-            commissionRate: p.commission_rate || 20, 
+            commissionRate: p.commission_rate || 20,
             sales: 0,
             paidReal: 0, 
             consumed: 0, 
@@ -68,24 +71,33 @@ const Team = () => {
         };
     });
 
+    // 2. Processa Pedidos (Vendas do Mês)
     orders.forEach(o => {
       if (!sellerMap[o.seller_id]) {
-        // Se vendedor não tiver perfil (legado), assume 20%
         sellerMap[o.seller_id] = { id: o.seller_id, name: o.seller_name, commissionRate: 20, sales: 0, paidReal: 0, consumed: 0, lastSale: null };
       }
 
+      // Atualiza última venda (independente do mês, para saber atividade)
       if (!sellerMap[o.seller_id].lastSale || new Date(o.created_at) > new Date(sellerMap[o.seller_id].lastSale)) {
           sellerMap[o.seller_id].lastSale = o.created_at;
       }
 
+      // Soma vendas SE for do mês selecionado
       if (o.type === 'sale' && o.status === 'approved' && isInSelectedMonth(o.created_at)) {
         sellerMap[o.seller_id].sales += Number(o.total || 0);
       }
     });
     
+    // 3. Processa Pagamentos (LÓGICA ATUALIZADA: POR COMPETÊNCIA)
     payments.forEach(p => {
-        if (isInSelectedMonth(p.date)) {
-            const order = orders.find(o => o.id === p.order_id);
+        const order = orders.find(o => o.id === p.order_id);
+        
+        // AQUI ESTÁ A MUDANÇA:
+        // Usamos a data do PEDIDO (order.created_at) como referência para saber o mês.
+        // Se não achar o pedido (o que não deve acontecer), usa a data do pagamento.
+        const referenceDate = order ? order.created_at : p.date;
+
+        if (isInSelectedMonth(referenceDate)) {
             if (order && sellerMap[order.seller_id]) {
                 if (p.method === 'Consumo') {
                     sellerMap[order.seller_id].consumed += Number(p.amount);
@@ -127,17 +139,18 @@ const Team = () => {
 
       {sellerToCalculate && (
           <CommissionModal 
-            selectedDate={selectedDate}
             seller={sellerToCalculate} 
             orders={orders} 
             payments={payments} 
+            selectedDate={selectedDate} // Passa o mês selecionado para o modal também
             onClose={() => {
                 setSellerToCalculate(null);
-                fetchProfiles(); // Atualiza a lista caso a comissão tenha mudado
+                fetchProfiles();
             }} 
           />
       )}
 
+      {/* Cabeçalho */}
       <div className="flex items-center gap-3">
         <button onClick={() => navigate('/')} className="p-3 bg-white rounded-2xl shadow-sm"><ArrowLeft size={20}/></button>
         <h2 className="text-xl font-black text-slate-800 uppercase">Equipe</h2>
@@ -171,10 +184,10 @@ const Team = () => {
         <h3 className="text-sm font-black text-slate-800 uppercase ml-2">Resumo Mensal ({months[selectedDate.getMonth()]})</h3>
         
         {sellers.map(s => {
-            // Cálculo com a TAXA PERSONALIZADA do vendedor
             const rate = s.commissionRate / 100;
             const estimatedCommission = s.sales * rate;
             const commissionToPay = (s.paidReal * rate) - s.consumed;
+            // Total Quitado = Dinheiro + Consumo (Refletindo a competência do mês selecionado)
             const totalSettled = s.paidReal + s.consumed;
             
             return (
@@ -206,6 +219,7 @@ const Team = () => {
                     </div>
                 </div>
                 
+                {/* Linha 1: Vendas e Total Pago (Compentência) */}
                 <div className="flex gap-3 mb-3">
                     <div className="flex-1 bg-green-50 p-3 rounded-2xl border border-green-100">
                         <p className="text-[9px] text-green-600 font-black uppercase flex items-center gap-1"><TrendingUp size={10}/> Vendas</p>
@@ -217,6 +231,7 @@ const Team = () => {
                     </div>
                 </div>
                 
+                {/* Linha 2: Comissão */}
                 <div className="bg-indigo-50 p-4 rounded-2xl border border-indigo-100 flex justify-between items-center">
                     <div>
                         <p className="text-[8px] text-indigo-400 font-bold uppercase mb-1">Estimada ({s.commissionRate}%)</p>

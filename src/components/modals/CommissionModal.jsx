@@ -10,15 +10,17 @@ const CommissionModal = ({ seller, orders, payments, onClose, selectedDate }) =>
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
-  // Helper para nome do mês
-  const monthName = selectedDate 
-    ? selectedDate.toLocaleString('pt-BR', { month: 'long', year: 'numeric' }) 
-    : 'Mês Atual';
+  // Formata o nome do mês para exibição (ex: "JANEIRO DE 2024")
+  const monthName = useMemo(() => {
+    const d = selectedDate || new Date();
+    return d.toLocaleString('pt-BR', { month: 'long', year: 'numeric' }).toUpperCase();
+  }, [selectedDate]);
 
   // Helper para verificar se a data pertence ao mês selecionado
   const isInSelectedMonth = (dateString) => {
     if (!dateString) return false;
     const d = new Date(dateString);
+    // Ajuste de fuso horário para garantir o dia correto na comparação
     const dAdjusted = new Date(d.getTime() + d.getTimezoneOffset() * 60000);
     const targetDate = selectedDate || new Date();
     return dAdjusted.getMonth() === targetDate.getMonth() && dAdjusted.getFullYear() === targetDate.getFullYear();
@@ -31,35 +33,39 @@ const CommissionModal = ({ seller, orders, payments, onClose, selectedDate }) =>
         o.seller_id === seller.id && 
         o.type === 'sale' && 
         o.status === 'approved' &&
-        isInSelectedMonth(o.created_at) // <--- FILTRO DE DATA
+        isInSelectedMonth(o.created_at) // <--- FILTRO DE DATA APLICADO
       )
       .reduce((acc, o) => acc + Number(o.total), 0);
   }, [orders, seller, selectedDate]);
 
-  // 2. Filtra Recebidos em Dinheiro (Apenas do Mês Selecionado)
+  // 2. Filtra Recebidos em Dinheiro (Apenas do Mês Selecionado - POR COMPETÊNCIA)
   const totalReceivedCash = useMemo(() => {
-    // Pega IDs dos pedidos deste vendedor (para garantir vínculo)
-    const sellerOrdersIds = orders.filter(o => o.seller_id === seller.id).map(o => o.id);
-    
     return payments
-      .filter(p => 
-        sellerOrdersIds.includes(p.order_id) && 
-        p.method !== 'Consumo' &&
-        isInSelectedMonth(p.date) // <--- FILTRO DE DATA (Data do pagamento)
-      )
+      .filter(p => {
+        // Encontra o pedido original deste pagamento
+        const order = orders.find(o => o.id === p.order_id);
+        
+        // Verifica se o pagamento pertence a este vendedor E não é consumo
+        if (!order || order.seller_id !== seller.id || p.method === 'Consumo') return false;
+
+        // AQUI ESTÁ A CORREÇÃO: Verifica a data do PEDIDO, não do pagamento
+        // Se o pedido for do mês selecionado, o pagamento conta (mesmo que feito depois)
+        return isInSelectedMonth(order.created_at);
+      })
       .reduce((acc, p) => acc + Number(p.amount), 0);
   }, [payments, orders, seller, selectedDate]);
 
-  // 3. Filtra Consumo (Apenas do Mês Selecionado)
+  // 3. Filtra Consumo (Apenas do Mês Selecionado - POR COMPETÊNCIA)
   const totalConsumed = useMemo(() => {
-    const sellerOrdersIds = orders.filter(o => o.seller_id === seller.id).map(o => o.id);
-    
     return payments
-      .filter(p => 
-        sellerOrdersIds.includes(p.order_id) && 
-        p.method === 'Consumo' &&
-        isInSelectedMonth(p.date) // <--- FILTRO DE DATA
-      )
+      .filter(p => {
+        const order = orders.find(o => o.id === p.order_id);
+        
+        if (!order || order.seller_id !== seller.id || p.method !== 'Consumo') return false;
+
+        // CORREÇÃO: Verifica a data do PEDIDO
+        return isInSelectedMonth(order.created_at);
+      })
       .reduce((acc, p) => acc + Number(p.amount), 0);
   }, [payments, orders, seller, selectedDate]);
 
@@ -67,6 +73,7 @@ const CommissionModal = ({ seller, orders, payments, onClose, selectedDate }) =>
   const commissionOnReceived = totalReceivedCash * (commissionRate / 100);
   const finalPayout = commissionOnReceived - totalConsumed - (Number(extraDiscount) || 0);
 
+  // --- FUNÇÃO: SALVAR TAXA PADRÃO ---
   const handleSaveRate = async () => {
     setIsSaving(true);
     const { error } = await supabase
@@ -83,6 +90,7 @@ const CommissionModal = ({ seller, orders, payments, onClose, selectedDate }) =>
     setIsSaving(false);
   };
 
+  // --- FUNÇÃO: IMPRIMIR ---
   const handlePrint = () => {
     const content = `
       <html>
@@ -98,8 +106,9 @@ const CommissionModal = ({ seller, orders, payments, onClose, selectedDate }) =>
         </style>
       </head>
       <body>
-        <h2>ACERTO - ${monthName.toUpperCase()}</h2>
-        <div style="text-align: center; font-size: 12px; margin-bottom: 10px;">${seller.name}</div>
+        <h2>ACERTO DE CONTAS</h2>
+        <div style="text-align: center; font-size: 12px; margin-bottom: 5px;">${seller.name}</div>
+        <div style="text-align: center; font-size: 12px; margin-bottom: 10px; font-weight: bold;">${monthName}</div>
         <div class="divider"></div>
         <div class="row"><span>Total de Vendas:</span><span>${formatBRL(totalSales)}</span></div>
         <div class="row"><span>Vendas Dinheiro:</span><span>${formatBRL(totalReceivedCash)}</span></div>
@@ -109,7 +118,7 @@ const CommissionModal = ({ seller, orders, payments, onClose, selectedDate }) =>
         ${Number(extraDiscount) > 0 ? `<div class="row"><span>(-) Desc. Extra:</span><span>${formatBRL(extraDiscount)}</span></div>` : ''}
         <div class="divider"></div>
         <div class="total">A PAGAR: ${formatBRL(finalPayout)}</div>
-        <div style="text-align: center; font-size: 10px; margin-top: 20px;">${new Date().toLocaleString()}</div>
+        <div style="text-align: center; font-size: 10px; margin-top: 20px;">Gerado em ${new Date().toLocaleString()}</div>
         <script>window.onload = function() { window.print(); setTimeout(() => window.close(), 1000); }</script>
       </body>
       </html>
@@ -119,9 +128,11 @@ const CommissionModal = ({ seller, orders, payments, onClose, selectedDate }) =>
     win.document.close();
   };
 
+  // --- FUNÇÃO: COMPARTILHAR WHATSAPP ---
   const handleShare = () => {
-    const text = `*ACERTO DE COMISSÃO - ${monthName.toUpperCase()}* 💰\n` +
-      `Vendedor: *${seller.name}*\n\n` +
+    const text = `*ACERTO DE COMISSÃO* 💰\n` +
+      `Vendedor: *${seller.name}*\n` +
+      `Período: *${monthName}*\n\n` +
       `📦 Total de Vendas: ${formatBRL(totalSales)}\n` +
       `💵 Vendas (Dinheiro/Pix): ${formatBRL(totalReceivedCash)}\n` +
       `📊 Taxa: ${commissionRate}%\n` +
@@ -143,7 +154,7 @@ const CommissionModal = ({ seller, orders, payments, onClose, selectedDate }) =>
                 <div className="p-3 bg-indigo-100 text-indigo-600 rounded-2xl"><Calculator size={24}/></div>
                 <div>
                     <h3 className="text-xl font-black text-slate-800 uppercase leading-none">Acerto</h3>
-                    {/* Mostra o mês selecionado */}
+                    {/* Exibe o mês no cabeçalho */}
                     <p className="text-xs font-bold text-indigo-500 uppercase mt-1">{monthName}</p>
                 </div>
             </div>
@@ -152,6 +163,7 @@ const CommissionModal = ({ seller, orders, payments, onClose, selectedDate }) =>
 
         <div className="space-y-4">
             
+            {/* Bloco de Configuração */}
             <div className="bg-slate-50 p-4 rounded-3xl border border-slate-100 space-y-3">
                 <div>
                     <label className="text-[10px] font-black text-slate-400 uppercase ml-2 flex justify-between">
@@ -159,14 +171,21 @@ const CommissionModal = ({ seller, orders, payments, onClose, selectedDate }) =>
                         {saveSuccess && <span className="text-green-500 flex items-center gap-1"><Check size={10}/> Salvo!</span>}
                     </label>
                     <div className="flex gap-2">
-                        <input 
-                            type="number" 
-                            className="flex-1 p-3 bg-white rounded-2xl font-bold text-slate-800 outline-none border border-slate-200 focus:border-indigo-400 transition-all"
-                            value={commissionRate}
-                            onChange={(e) => setCommissionRate(e.target.value)}
-                        />
-                        <button onClick={handleSaveRate} disabled={isSaving} className="p-3 bg-slate-200 text-slate-600 rounded-2xl hover:bg-indigo-500 hover:text-white transition-colors"><Save size={20}/></button>
-                    </div>
+                            <input 
+                                type="number" 
+                                className="flex-1 min-w-0 p-3 bg-white rounded-2xl font-bold text-slate-800 outline-none border border-slate-200 focus:border-indigo-400 transition-all"
+                                value={commissionRate}
+                                onChange={(e) => setCommissionRate(e.target.value)}
+                            />
+                            <button 
+                                onClick={handleSaveRate}
+                                disabled={isSaving}
+                                className="p-3 bg-slate-200 text-slate-600 rounded-2xl hover:bg-indigo-500 hover:text-white transition-colors flex-shrink-0"
+                                title="Salvar como padrão para este vendedor"
+                            >
+                                <Save size={20}/>
+                            </button>
+                        </div>
                 </div>
                 <div>
                     <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Desconto Extra (R$)</label>
@@ -180,7 +199,9 @@ const CommissionModal = ({ seller, orders, payments, onClose, selectedDate }) =>
                 </div>
             </div>
 
+            {/* Resumo Matemático */}
             <div className="space-y-2 text-xs">
+                {/* Linha Nova: Total de Vendas */}
                 <div className="flex justify-between items-center p-2 border-b border-slate-100 pb-2 mb-2">
                     <span className="font-bold text-slate-500 uppercase tracking-wide">Total de Vendas</span>
                     <span className="font-mono font-black text-slate-800 text-sm">{formatBRL(totalSales)}</span>
@@ -209,6 +230,7 @@ const CommissionModal = ({ seller, orders, payments, onClose, selectedDate }) =>
                 )}
             </div>
 
+            {/* Resultado Final */}
             <div className={`p-5 rounded-[2rem] text-center border-2 ${finalPayout >= 0 ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
                 <p className={`text-[10px] font-black uppercase tracking-widest ${finalPayout >= 0 ? 'text-green-600' : 'text-red-500'}`}>Valor a Pagar ao Vendedor</p>
                 <p className={`text-3xl font-black font-mono mt-1 ${finalPayout >= 0 ? 'text-green-700' : 'text-red-600'}`}>
@@ -216,6 +238,7 @@ const CommissionModal = ({ seller, orders, payments, onClose, selectedDate }) =>
                 </p>
             </div>
             
+            {/* Ações Finais */}
             <div className="flex gap-3">
                 <button onClick={handleShare} className="flex-1 py-4 bg-green-500 text-white rounded-2xl font-black uppercase text-xs shadow-lg flex items-center justify-center gap-2 active:scale-95 transition-all">
                     <Share2 size={16}/> WhatsApp
@@ -231,6 +254,11 @@ const CommissionModal = ({ seller, orders, payments, onClose, selectedDate }) =>
   );
 };
 
-const MinusCircle = ({size}) => (<svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line></svg>);
+// Ícone auxiliar
+const MinusCircle = ({size}) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+        <line x1="5" y1="12" x2="19" y2="12"></line>
+    </svg>
+);
 
 export default CommissionModal;
