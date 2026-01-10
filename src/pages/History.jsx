@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { ArrowLeft, ChevronRight, X, Calendar, Image as ImageIcon, Trash2, Edit2, Save, Link } from 'lucide-react'; // Adicionei Link
+import { ArrowLeft, ChevronRight, X, Calendar, Image as ImageIcon, Trash2, Edit2, Save, Link, Clock, CheckCircle2 } from 'lucide-react';
 import { useData } from '../contexts/DataContext';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../services/supabase';
@@ -56,16 +56,16 @@ const History = () => {
         return o.status !== 'rejected' && d.getMonth() === month && d.getFullYear() === year;
     }).sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
 
-    // PAGAMENTOS: AGORA USA A DATA DO PEDIDO ORIGINAL (Competência)
+    // PAGAMENTOS: USA A DATA DO PEDIDO ORIGINAL (Competência)
     const paymentsInMonth = myPayments.filter(p => {
         // Busca o pedido original para ver a data dele
         const originalOrder = orders.find(o => o.id === p.order_id);
         
-        // Se achou o pedido, usa a data do pedido. Se não (erro de dados), usa a data do pagamento.
-        const referenceDate = originalOrder ? new Date(originalOrder.created_at) : new Date(p.date);
+        // Se achou o pedido, usa a data do pedido. Se não, usa a data do pagamento (ajustada para meio-dia para evitar bug de dia anterior).
+        const referenceDate = originalOrder ? new Date(originalOrder.created_at) : new Date(p.date + 'T12:00:00');
         
         return referenceDate.getMonth() === month && referenceDate.getFullYear() === year;
-    }).sort((a,b) => new Date(b.date) - new Date(a.date)); // Ordena por data de pagamento (mais recente primeiro)
+    }).sort((a,b) => new Date(b.date) - new Date(a.date));
 
     return { orders: ordersInMonth, payments: paymentsInMonth };
   }, [orders, payments, isAdmin, session, month, year, filterSellerId]);
@@ -76,6 +76,7 @@ const History = () => {
         return acc;
     }, 0);
 
+    // Soma o total pago dos pedidos listados
     const totalPaid = filteredData.orders.reduce((acc, o) => {
         if (o.type === 'sale' && o.status === 'approved') return acc + Number(o.paid || 0);
         return acc;
@@ -97,8 +98,11 @@ const History = () => {
     if (!error) {
         const order = orders.find(o => o.id === payment.order_id);
         if (order) {
-            const newPaid = Math.max(0, Number(order.paid || 0) - Number(payment.amount));
-            await supabase.from('orders').update({ paid: newPaid }).eq('id', order.id);
+            // Se o pagamento estava aprovado, estorna o valor do pedido
+            if (payment.status !== 'pending') {
+                const newPaid = Math.max(0, Number(order.paid || 0) - Number(payment.amount));
+                await supabase.from('orders').update({ paid: newPaid }).eq('id', order.id);
+            }
         }
         refreshData();
     } else {
@@ -127,12 +131,13 @@ const History = () => {
           amount: newAmount,
           date: editForm.date,
           method: editForm.method,
-          description: editForm.description
+          description: editForm.description,
       }).eq('id', editingPayment.id);
 
       if (!error) {
           const order = orders.find(o => o.id === editingPayment.order_id);
-          if (order) {
+          // Só ajusta o saldo do pedido se o pagamento já estava contabilizado (não pendente)
+          if (order && editingPayment.status !== 'pending') {
               const newPaid = Number(order.paid || 0) + delta;
               await supabase.from('orders').update({ paid: newPaid }).eq('id', order.id);
           }
@@ -152,7 +157,7 @@ const History = () => {
       <ConfirmModal 
         isOpen={!!confirmDelete}
         title="Excluir Pagamento?"
-        message={`Deseja remover o registro de ${formatBRL(confirmDelete?.amount)}? O saldo devedor do pedido aumentará.`}
+        message={`Deseja remover o registro de ${formatBRL(confirmDelete?.amount)}?`}
         onConfirm={() => handleDeletePayment(confirmDelete)}
         onCancel={() => setConfirmDelete(null)}
       />
@@ -201,7 +206,8 @@ const History = () => {
           <button onClick={nextMonth} className="p-3 bg-slate-50 rounded-xl active:scale-90"><ChevronRight size={16}/></button>
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
+      {/* RESUMO FINANCEIRO */}
+      <div className={`grid gap-3 ${isAdmin ? 'grid-cols-2' : 'grid-cols-1'}`}>
            <div className="bg-white p-4 rounded-[2rem] border border-slate-50 shadow-sm">
                 <p className="text-[9px] text-slate-400 uppercase font-black tracking-widest mb-1">Total de Vendas</p>
                 <p className="text-2xl font-black text-slate-800 tracking-tighter">{formatBRL(stats.sales)}</p>
@@ -241,68 +247,80 @@ const History = () => {
         ) : (
             <>
                {filteredData.payments.map(p => {
-                 // Busca o pedido original para mostrar a data correta
                  const originalOrder = orders.find(o => o.id === p.order_id);
-                 // Data de referência (para mostrar que é de outro mês se necessário)
-                 const refDate = originalOrder ? new Date(originalOrder.created_at) : new Date(p.date);
-                 const isDifferentMonth = refDate.getMonth() !== new Date(p.date).getMonth();
+                 const refDate = originalOrder ? new Date(originalOrder.created_at) : new Date(p.date + 'T12:00:00');
 
                  return (
-                 <div key={p.id} className="bg-white p-4 rounded-[2rem] border border-green-50 shadow-sm flex flex-col gap-2 relative">
+                 <div key={p.id} className={`bg-white p-4 rounded-[2rem] border shadow-sm flex flex-col gap-2 relative ${p.status === 'pending' ? 'border-yellow-200 bg-yellow-50' : 'border-green-50'}`}>
                     <div className="flex justify-between items-start">
                         <div>
-                            {/* Mostra data do pagamento */}
-                            <p className="text-[10px] font-black text-slate-400 uppercase">Pago em: {new Date(p.date).toLocaleDateString()}</p>
-                            <p className="font-bold text-slate-800 text-xs mt-1">{p.method}</p>
+                            {/* CORREÇÃO: Data do pagamento forçada para meio-dia para evitar bug de fuso horário */}
+                            <p className="text-[10px] font-black text-slate-400 uppercase">{new Date(p.date + 'T12:00:00').toLocaleDateString()}</p>
+                            <div className="flex items-center gap-2">
+                                <p className="font-bold text-slate-800 text-xs mt-1">{p.method}</p>
+                                {p.status === 'pending' && <span className="text-[9px] bg-yellow-200 text-yellow-800 px-1.5 py-0.5 rounded font-black uppercase flex items-center gap-1"><Clock size={10}/> Pendente</span>}
+                            </div>
                             
-                            {/* Se o pedido for de outro mês/dia, mostra a referência */}
                             {originalOrder && (
                                 <p className="text-[9px] text-indigo-400 font-bold mt-1 flex items-center gap-1">
                                     <Link size={10}/> Ref. Pedido {refDate.toLocaleDateString()}
+                                </p>
+                            )}
+
+                             {/* ASSINATURA DE APROVAÇÃO */}
+                            {p.status === 'approved' && p.approver_name && (
+                                <p className="text-[9px] text-green-600 font-bold mt-1 flex items-center gap-1">
+                                    <CheckCircle2 size={10}/> Conf: {p.approver_name}
                                 </p>
                             )}
                         </div>
                         <p className="font-black font-mono text-green-600 text-lg">{formatBRL(p.amount)}</p>
                     </div>
                     
-                    {(p.description || p.proof) && (
-                        <div className="mt-2 pt-2 border-t border-slate-50 flex flex-col gap-2">
-                            {p.description && (
-                                <p className="text-[10px] text-slate-500 font-medium bg-slate-50 p-2 rounded-lg italic border border-slate-100">
-                                    {p.description}
-                                </p>
-                            )}
-                            {p.proof && (
-                                <button 
-                                    onClick={() => {
-                                        const w = window.open(); 
-                                        w.document.write('<img src="'+p.proof+'" style="max-width:100%"/>');
-                                    }} 
-                                    className="flex items-center gap-1 text-[10px] font-bold text-indigo-500 bg-indigo-50 p-2 rounded-xl active:scale-95 transition-all mr-auto"
-                                >
-                                    <ImageIcon size={14} /> Ver Comprovante
-                                </button>
-                            )}
-                        </div>
+                    {/* Descrição e Observação */}
+                    {p.description && (
+                        <p className="text-[10px] text-slate-500 font-medium bg-slate-50 p-2 rounded-lg italic border border-slate-100">
+                            {p.description}
+                        </p>
                     )}
 
-                    {/* Botões de Ação (Só se não for Admin) */}
-                    {!isAdmin && (
-                        <div className="absolute top-4 right-4 flex gap-2">
+                    {/* BARRA DE AÇÕES INFERIOR - NOVO LAYOUT */}
+                    <div className="flex items-center justify-between mt-1 pt-1">
+                        {/* Lado Esquerdo: Comprovante */}
+                        <div>
+                        {p.proof ? (
                             <button 
-                                onClick={() => startEditingPayment(p)} 
-                                className="p-2 bg-slate-100 text-slate-400 rounded-xl hover:bg-slate-200 active:scale-90 transition-all"
+                                onClick={() => {
+                                    const w = window.open(); 
+                                    w.document.write('<img src="'+p.proof+'" style="max-width:100%"/>');
+                                }} 
+                                className="flex items-center gap-1 text-[10px] font-bold text-indigo-500 bg-indigo-50 p-2 rounded-xl active:scale-95 transition-all"
                             >
-                                <Edit2 size={16}/>
+                                <ImageIcon size={14} /> Ver Comprovante
                             </button>
-                            <button 
-                                onClick={() => setConfirmDelete(p)} 
-                                className="p-2 bg-red-50 text-red-400 rounded-xl hover:bg-red-100 active:scale-90 transition-all"
-                            >
-                                <Trash2 size={16}/>
-                            </button>
+                        ) : (
+                             <span className="text-[9px] text-slate-300 font-bold p-2">Sem comprovante</span>
+                        )}
                         </div>
-                    )}
+
+                        {/* Lado Direito: Editar/Excluir (Só se não for Admin) */}
+                        {!isAdmin && (
+                            <div className="flex gap-2">
+                                <button 
+                                    onClick={() => startEditingPayment(p)} 
+                                    className="p-2 bg-slate-100 text-slate-400 rounded-xl hover:bg-slate-200 active:scale-90 transition-all"
+                                >
+                                    <Edit2 size={16}/>
+                                </button>
+                                <button 
+                                    onClick={() => setConfirmDelete(p)} 
+                                    className="p-2 bg-red-50 text-red-400 rounded-xl hover:bg-red-100 active:scale-90 transition-all"
+                                >
+                                    <Trash2 size={16}/>
+                                </button>
+                            </div>
+                        )}
+                    </div>
                  </div>
                )})}
                {filteredData.payments.length === 0 && <p className="text-center text-slate-400 py-10 uppercase text-xs font-bold">Sem pagamentos vinculados a pedidos deste mês.</p>}

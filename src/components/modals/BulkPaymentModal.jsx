@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { X, Upload, Loader2, CheckSquare, Square } from 'lucide-react';
+import { X, Upload, Loader2, CheckSquare, Square, AlertTriangle } from 'lucide-react';
 import { formatBRL } from '../../utils/formatters';
+import { supabase } from '../../services/supabase';
 
 const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
   // Filtra apenas pedidos VÁLIDOS para pagamento:
@@ -69,10 +70,65 @@ const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
     }
     
     setIsSubmitting(true);
+    
+    // LÓGICA DE DINHEIRO = PENDENTE
+    const isCash = paymentData.method === 'Dinheiro';
+    const status = isCash ? 'pending' : 'approved';
+
     try {
-        await onConfirm(paymentData, selectedIds);
+        // Envia também quais pedidos foram selecionados e o status inicial
+        // Vamos precisar adaptar a lógica aqui, pois o onConfirm original (handleBulkPayment em SellerDashboard)
+        // pode não estar preparado para receber o status. 
+        // IDEALMENTE: Atualizamos o handleBulkPayment no SellerDashboard para aceitar status, 
+        // OU fazemos a lógica aqui mesmo (como está abaixo, replicando a lógica de distribuição).
+        
+        let remaining = parseFloat(paymentData.amount);
+        
+        // Filtra APENAS os pedidos que o usuário marcou no modal
+        const targetOrders = unpaidOrders
+            .filter(o => selectedIds.includes(o.id))
+            .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+
+        for (const order of targetOrders) {
+            if (remaining <= 0) break;
+            
+            const currentDebt = Number(order.total) - Number(order.paid || 0);
+            // Paga o que for menor: o que falta do pedido OU o que sobrou do dinheiro
+            const payAmount = Math.min(remaining, currentDebt);
+
+            if (payAmount > 0) {
+                await supabase.from('payments').insert([{
+                    order_id: order.id,
+                    amount: payAmount,
+                    date: paymentData.date,
+                    method: paymentData.method,
+                    proof: paymentData.proof,
+                    description: 'Pagamento Selecionado',
+                    status: status // <--- STATUS DEFINIDO AQUI
+                }]);
+
+                // SÓ ABATE A DÍVIDA SE NÃO FOR DINHEIRO (APROVAÇÃO IMEDIATA)
+                if (!isCash) {
+                    const newPaid = Number(order.paid || 0) + payAmount;
+                    await supabase.from('orders').update({ paid: newPaid }).eq('id', order.id);
+                }
+                remaining -= payAmount;
+            }
+        }
+        
+        if (isCash) {
+            alert("Pagamento em dinheiro registrado! Aguardando conferência do Admin.");
+        } else {
+            alert("Pagamento realizado com sucesso!");
+        }
+        
+        onClose();
+        // Recarrega a página para atualizar os dados (idealmente seria refreshData do contexto, mas aqui funciona)
+        window.location.reload(); 
+
     } catch (e) {
         console.error(e);
+        alert("Erro ao processar pagamento.");
         setIsSubmitting(false);
     }
   };
@@ -147,6 +203,14 @@ const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
                 <label className="text-[10px] font-bold text-slate-400 uppercase ml-2">Comprovante</label>
                 <label className="w-full p-3 bg-slate-50 rounded-2xl border-2 border-dashed border-slate-200 flex items-center justify-center gap-2 cursor-pointer text-slate-400 font-bold text-xs"><Upload size={14}/> {proofFile ? "Imagem Selecionada" : "Anexar"} <input type="file" className="hidden" accept="image/*" onChange={handleFileChange} /></label>
             </div>
+
+            {/* AVISO DE CONFERÊNCIA SE FOR DINHEIRO */}
+            {paymentData.method === 'Dinheiro' && (
+                <div className="bg-yellow-50 p-3 rounded-xl flex items-center gap-2 border border-yellow-200 animate-in fade-in">
+                    <AlertTriangle size={16} className="text-yellow-600 flex-shrink-0"/>
+                    <p className="text-[9px] text-yellow-700 font-bold leading-tight">Pagamentos em dinheiro ficam "Pendentes" até a conferência do Admin.</p>
+                </div>
+            )}
 
             <button 
                 onClick={handleConfirm} 

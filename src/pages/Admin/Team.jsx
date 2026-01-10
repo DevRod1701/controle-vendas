@@ -239,7 +239,7 @@ const Team = () => {
                     </div>
                     
                     <div className="text-right pl-4 border-l border-indigo-200">
-                        <p className="text-[8px] text-indigo-500 font-black uppercase flex items-center gap-1 justify-end"><Wallet size={10}/> Saldo a Pagar</p>
+                        <p className="text-[8px] text-indigo-500 font-black uppercase flex items-center gap-1 justify-end"><Wallet size={10}/> Comissão a Pagar</p>
                         <p className={`text-xl font-black font-mono ${commissionToPay >= 0 ? 'text-indigo-700' : 'text-red-500'}`}>
                             {formatBRL(commissionToPay)}
                         </p>

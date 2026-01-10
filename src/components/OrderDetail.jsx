@@ -107,10 +107,7 @@ const OrderDetail = ({ order, onClose, refreshData }) => {
   return (
     <div className="fixed inset-0 bg-white z-[150] animate-in slide-in-from-right overflow-y-auto font-bold">
       {renderAlert()}
-      
-      {/* pb-60 garante que o conteúdo não fique escondido atrás dos botões no mobile */}
       <div className="p-6 pb-60 space-y-6">
-        
         <div className="flex justify-between items-center">
           <div className="flex items-center gap-3"><button onClick={onClose} className="p-3 bg-slate-100 rounded-2xl"><ArrowLeft size={20}/></button><h2 className="text-xl font-black text-slate-800 uppercase">Pedido</h2></div>
           <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase ${order.status === 'approved' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>{order.status}</span>
@@ -126,7 +123,7 @@ const OrderDetail = ({ order, onClose, refreshData }) => {
               {order.type !== 'return' && <div className="text-red-500">Falta: {formatBRL(pendente)}</div>}
            </div>
            
-           {/* AVISO VISUAL: Se não puder pagar, mostra o motivo */}
+           {/* AVISO VISUAL - Motivo do bloqueio */}
            {!canPay && (
                <div className="mt-4 bg-gray-100 p-2 rounded-xl text-[10px] font-black text-gray-500 uppercase flex items-center justify-center gap-2">
                    <AlertCircle size={12}/> 
