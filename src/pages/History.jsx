@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { ArrowLeft, ChevronRight, X, Calendar, Image as ImageIcon, Trash2, Edit2, Save } from 'lucide-react'; // Adicionado Edit2 e Save
+import { ArrowLeft, ChevronRight, X, Calendar, Image as ImageIcon, Trash2, Edit2, Save } from 'lucide-react';
 import { useData } from '../contexts/DataContext';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../services/supabase';
@@ -262,20 +262,23 @@ const History = () => {
                             </button>
                         )}
                         
-                        <div className={`flex gap-2 ${!p.proof ? 'ml-auto' : ''}`}>
-                             <button 
-                                onClick={() => startEditingPayment(p)} 
-                                className="p-2 bg-slate-100 text-slate-400 rounded-xl hover:bg-slate-200 active:scale-90 transition-all"
-                            >
-                                <Edit2 size={16}/>
-                            </button>
-                            <button 
-                                onClick={() => setConfirmDelete(p)} 
-                                className="p-2 bg-red-50 text-red-400 rounded-xl hover:bg-red-100 active:scale-90 transition-all"
-                            >
-                                <Trash2 size={16}/>
-                            </button>
-                        </div>
+                        {/* BOTÕES DE EDIÇÃO/EXCLUSÃO (Somente se não for Admin) */}
+                        {!isAdmin && (
+                            <div className={`flex gap-2 ${!p.proof ? 'ml-auto' : ''}`}>
+                                <button 
+                                    onClick={() => startEditingPayment(p)} 
+                                    className="p-2 bg-slate-100 text-slate-400 rounded-xl hover:bg-slate-200 active:scale-90 transition-all"
+                                >
+                                    <Edit2 size={16}/>
+                                </button>
+                                <button 
+                                    onClick={() => setConfirmDelete(p)} 
+                                    className="p-2 bg-red-50 text-red-400 rounded-xl hover:bg-red-100 active:scale-90 transition-all"
+                                >
+                                    <Trash2 size={16}/>
+                                </button>
+                            </div>
+                        )}
                     </div>
                  </div>
                ))}
