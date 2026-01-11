@@ -1,14 +1,19 @@
 import React, { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Package, UserPlus, FileBarChart, History } from 'lucide-react'; // Adicionado History
+import { Package, UserPlus, FileBarChart, History } from 'lucide-react'; 
 import { useData } from '../../contexts/DataContext';
 import { formatBRL } from '../../utils/formatters';
 
 const AdminDashboard = () => {
-  const { orders } = useData();
+  const { orders, payments } = useData(); // Adicionado payments
   const navigate = useNavigate();
 
-  const pendingCount = useMemo(() => orders.filter(o => (o.status === 'pending' || o.status === 'return_pending')).length, [orders]);
+  // CORREÇÃO: Soma pedidos pendentes + pagamentos pendentes
+  const pendingCount = useMemo(() => {
+    const ordersPending = orders.filter(o => o.status === 'pending' || o.status === 'return_pending').length;
+    const paymentsPending = payments.filter(p => p.status === 'pending').length;
+    return ordersPending + paymentsPending;
+  }, [orders, payments]);
   
   const totalRua = useMemo(() => {
     return orders.reduce((acc, o) => {
@@ -46,20 +51,20 @@ const AdminDashboard = () => {
           <div className="p-4 bg-green-100 text-green-600 rounded-2xl shadow-inner"><UserPlus size={24}/></div>
           <div><p className="font-black text-slate-800 leading-tight text-green-700">Novo Vendedor</p><p className="text-[10px] text-green-400 uppercase font-bold tracking-tighter">Cadastrar</p></div>
         </button>
-
-        
-        {/* Botão de Relatórios (POR ÚLTIMO e DESTACADO) */}
+      
+        {/* Botão de Relatórios  */}
         <button onClick={() => navigate('/relatorios')} className="p-6 bg-slate-600 text-white rounded-[2.5rem] flex items-center gap-4 shadow-lg active:scale-95 transition-all">
           <div className="p-4 bg-white/15 rounded-2xl"><FileBarChart size={24}/></div>
           <div><p className="font-black leading-tight">Relatórios</p><p className="text-[10px] text-slate-300 uppercase font-bold tracking-tighter">Análise Completa</p></div>
         </button>
 
-        {/* Botão de Importação Retroativa (Novo) */}
+        {/* Botão de Importação Retroativa */}
         <button onClick={() => navigate('/importar')} className="p-4 bg-yellow-50 border-2 border-yellow-100 rounded-[2rem] flex items-center justify-center gap-2 text-yellow-700 active:scale-95 transition-all">
             <History size={18}/>
             <span className="text-xs font-black uppercase">Importar Vendas Antigas</span>
         </button>
 
+        
       </div>
     </div>
   );
