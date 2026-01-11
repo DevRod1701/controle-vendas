@@ -18,7 +18,6 @@ const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
       .sort((a, b) => new Date(a.created_at) - new Date(b.created_at)); // Mais antigos primeiro
   }, [orders]);
 
-  // Estado dos pedidos selecionados (Array de IDs)
   const [selectedIds, setSelectedIds] = useState([]);
   
   const [paymentData, setPaymentData] = useState({ 
@@ -76,12 +75,6 @@ const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
     const status = isCash ? 'pending' : 'approved';
 
     try {
-        // Envia também quais pedidos foram selecionados e o status inicial
-        // Vamos precisar adaptar a lógica aqui, pois o onConfirm original (handleBulkPayment em SellerDashboard)
-        // pode não estar preparado para receber o status. 
-        // IDEALMENTE: Atualizamos o handleBulkPayment no SellerDashboard para aceitar status, 
-        // OU fazemos a lógica aqui mesmo (como está abaixo, replicando a lógica de distribuição).
-        
         let remaining = parseFloat(paymentData.amount);
         
         // Filtra APENAS os pedidos que o usuário marcou no modal
@@ -93,7 +86,6 @@ const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
             if (remaining <= 0) break;
             
             const currentDebt = Number(order.total) - Number(order.paid || 0);
-            // Paga o que for menor: o que falta do pedido OU o que sobrou do dinheiro
             const payAmount = Math.min(remaining, currentDebt);
 
             if (payAmount > 0) {
@@ -104,7 +96,7 @@ const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
                     method: paymentData.method,
                     proof: paymentData.proof,
                     description: 'Pagamento Selecionado',
-                    status: status // <--- STATUS DEFINIDO AQUI
+                    status: status // define se precisa de aprovação
                 }]);
 
                 // SÓ ABATE A DÍVIDA SE NÃO FOR DINHEIRO (APROVAÇÃO IMEDIATA)
@@ -123,8 +115,9 @@ const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
         }
         
         onClose();
-        // Recarrega a página para atualizar os dados (idealmente seria refreshData do contexto, mas aqui funciona)
-        window.location.reload(); 
+        
+        // CORREÇÃO: Chama o callback onConfirm (que deve ser o refreshData) para atualizar sem reload
+        if (onConfirm) onConfirm(); 
 
     } catch (e) {
         console.error(e);

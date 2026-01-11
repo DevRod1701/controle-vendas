@@ -1,12 +1,14 @@
 import React, { useState, useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { ArrowLeft, ChevronRight, X, Calendar, Image as ImageIcon, Trash2, Edit2, Save, Link, Clock, CheckCircle2 } from 'lucide-react';
+import { ArrowLeft, ChevronRight, X, Calendar, Image as ImageIcon, Trash2, Edit2, Link, Clock, CheckCircle2, DollarSign, Undo2, Printer } from 'lucide-react';
 import { useData } from '../contexts/DataContext';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../services/supabase';
 import { formatBRL } from '../utils/formatters';
 import OrderDetail from '../components/OrderDetail';
 import ConfirmModal from '../components/modals/ConfirmModal';
+import ImageModal from '../components/modals/ImageModal';
+import { printOrder } from '../utils/printHandler';
 
 const History = () => {
   const { orders, payments, refreshData } = useData();
@@ -19,8 +21,8 @@ const History = () => {
 
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null); 
+  const [viewImage, setViewImage] = useState(null);
   
-  // ESTADOS PARA EDIÇÃO DE PAGAMENTO
   const [editingPayment, setEditingPayment] = useState(null);
   const [editForm, setEditForm] = useState({ amount: '', date: '', method: '', description: '' });
   
@@ -30,11 +32,12 @@ const History = () => {
 
   const months = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
 
+  // Lógica de Filtro (Competência)
   const filteredData = useMemo(() => {
     let myOrders = orders;
     let myPayments = payments;
 
-    // 1. Filtra por Vendedor (Admin ou Logado)
+    // Filtra por Vendedor
     if (!isAdmin) {
         myOrders = orders.filter(o => o.seller_id === session?.user?.id);
         myPayments = payments.filter(p => {
@@ -49,19 +52,16 @@ const History = () => {
         });
     }
 
-    // 2. Filtra por Data (Mês/Ano)
-    // PEDIDOS: Usa a data de criação do pedido
+    // Filtra Pedidos por Mês
     const ordersInMonth = myOrders.filter(o => {
         const d = new Date(o.created_at);
         return o.status !== 'rejected' && d.getMonth() === month && d.getFullYear() === year;
     }).sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
 
-    // PAGAMENTOS: USA A DATA DO PEDIDO ORIGINAL (Competência)
+    // Filtra Pagamentos por Competência (Data do Pedido Original)
     const paymentsInMonth = myPayments.filter(p => {
-        // Busca o pedido original para ver a data dele
         const originalOrder = orders.find(o => o.id === p.order_id);
-        
-        // Se achou o pedido, usa a data do pedido. Se não, usa a data do pagamento (ajustada para meio-dia para evitar bug de dia anterior).
+        // Se achou o pedido, usa a data do pedido. Se não, usa a data do pagamento.
         const referenceDate = originalOrder ? new Date(originalOrder.created_at) : new Date(p.date + 'T12:00:00');
         
         return referenceDate.getMonth() === month && referenceDate.getFullYear() === year;
@@ -70,13 +70,13 @@ const History = () => {
     return { orders: ordersInMonth, payments: paymentsInMonth };
   }, [orders, payments, isAdmin, session, month, year, filterSellerId]);
 
+  // Estatísticas
   const stats = useMemo(() => {
     const totalSales = filteredData.orders.reduce((acc, o) => {
         if (o.type === 'sale' && o.status === 'approved') return acc + Number(o.total || 0);
         return acc;
     }, 0);
 
-    // Soma o total pago dos pedidos listados
     const totalPaid = filteredData.orders.reduce((acc, o) => {
         if (o.type === 'sale' && o.status === 'approved') return acc + Number(o.paid || 0);
         return acc;
@@ -89,7 +89,7 @@ const History = () => {
   const nextMonth = () => { if(month===11){setMonth(0); setYear(year+1)} else setMonth(month+1) };
   const clearFilter = () => { navigate('/historico', { state: null }); };
 
-  // --- FUNÇÕES DE PAGAMENTO (EXCLUIR E EDITAR) ---
+  // --- FUNÇÕES DE PAGAMENTO ---
 
   const handleDeletePayment = async (payment) => {
     setConfirmDelete(null);
@@ -98,7 +98,7 @@ const History = () => {
     if (!error) {
         const order = orders.find(o => o.id === payment.order_id);
         if (order) {
-            // Se o pagamento estava aprovado, estorna o valor do pedido
+            // Se o pagamento NÃO era pendente, estorna o valor do pedido
             if (payment.status !== 'pending') {
                 const newPaid = Math.max(0, Number(order.paid || 0) - Number(payment.amount));
                 await supabase.from('orders').update({ paid: newPaid }).eq('id', order.id);
@@ -131,7 +131,7 @@ const History = () => {
           amount: newAmount,
           date: editForm.date,
           method: editForm.method,
-          description: editForm.description,
+          description: editForm.description
       }).eq('id', editingPayment.id);
 
       if (!error) {
@@ -153,7 +153,6 @@ const History = () => {
   return (
     <div className="p-6 pb-40 space-y-4 animate-in fade-in text-left font-bold">
       
-      {/* Modal de Confirmação de Exclusão */}
       <ConfirmModal 
         isOpen={!!confirmDelete}
         title="Excluir Pagamento?"
@@ -161,8 +160,10 @@ const History = () => {
         onConfirm={() => handleDeletePayment(confirmDelete)}
         onCancel={() => setConfirmDelete(null)}
       />
+      
+      <ImageModal isOpen={!!viewImage} imageUrl={viewImage} onClose={() => setViewImage(null)} />
 
-      {/* Modal de Edição de Pagamento */}
+      {/* Modal de Edição */}
       {editingPayment && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[400] flex items-end sm:items-center justify-center p-4 animate-in fade-in">
             <div className="bg-white w-full max-w-sm rounded-[2.5rem] p-6 shadow-2xl animate-in slide-in-from-bottom-10 space-y-4">
@@ -206,7 +207,6 @@ const History = () => {
           <button onClick={nextMonth} className="p-3 bg-slate-50 rounded-xl active:scale-90"><ChevronRight size={16}/></button>
       </div>
 
-      {/* RESUMO FINANCEIRO */}
       <div className={`grid gap-3 ${isAdmin ? 'grid-cols-2' : 'grid-cols-1'}`}>
            <div className="bg-white p-4 rounded-[2rem] border border-slate-50 shadow-sm">
                 <p className="text-[9px] text-slate-400 uppercase font-black tracking-widest mb-1">Total de Vendas</p>
@@ -254,7 +254,7 @@ const History = () => {
                  <div key={p.id} className={`bg-white p-4 rounded-[2rem] border shadow-sm flex flex-col gap-2 relative ${p.status === 'pending' ? 'border-yellow-200 bg-yellow-50' : 'border-green-50'}`}>
                     <div className="flex justify-between items-start">
                         <div>
-                            {/* CORREÇÃO: Data do pagamento forçada para meio-dia para evitar bug de fuso horário */}
+                            {/* DATA CORRETA DO PAGAMENTO */}
                             <p className="text-[10px] font-black text-slate-400 uppercase">{new Date(p.date + 'T12:00:00').toLocaleDateString()}</p>
                             <div className="flex items-center gap-2">
                                 <p className="font-bold text-slate-800 text-xs mt-1">{p.method}</p>
@@ -267,7 +267,7 @@ const History = () => {
                                 </p>
                             )}
 
-                             {/* ASSINATURA DE APROVAÇÃO */}
+                             {/* ASSINATURA */}
                             {p.status === 'approved' && p.approver_name && (
                                 <p className="text-[9px] text-green-600 font-bold mt-1 flex items-center gap-1">
                                     <CheckCircle2 size={10}/> Conf: {p.approver_name}
@@ -277,46 +277,45 @@ const History = () => {
                         <p className="font-black font-mono text-green-600 text-lg">{formatBRL(p.amount)}</p>
                     </div>
                     
-                    {/* Descrição e Observação */}
+                    {/* OBSERVAÇÃO */}
                     {p.description && (
                         <p className="text-[10px] text-slate-500 font-medium bg-slate-50 p-2 rounded-lg italic border border-slate-100">
                             {p.description}
                         </p>
                     )}
 
-                    {/* BARRA DE AÇÕES INFERIOR - NOVO LAYOUT */}
-                    <div className="flex items-center justify-between mt-1 pt-1">
-                        {/* Lado Esquerdo: Comprovante */}
-                        <div>
-                        {p.proof ? (
-                            <button 
-                                onClick={() => {
-                                    const w = window.open(); 
-                                    w.document.write('<img src="'+p.proof+'" style="max-width:100%"/>');
-                                }} 
-                                className="flex items-center gap-1 text-[10px] font-bold text-indigo-500 bg-indigo-50 p-2 rounded-xl active:scale-95 transition-all"
-                            >
-                                <ImageIcon size={14} /> Ver Comprovante
-                            </button>
-                        ) : (
-                             <span className="text-[9px] text-slate-300 font-bold p-2">Sem comprovante</span>
-                        )}
+                    {/* BARRA DE AÇÕES - MESMA LINHA */}
+                    <div className="flex items-center justify-between mt-1 pt-1 border-t border-slate-50">
+                        {/* Esquerda: Comprovante (Se houver) */}
+                        <div className="flex-1">
+                            {p.proof ? (
+                                <button 
+                                    onClick={() => setViewImage(p.proof)} 
+                                    className="flex items-center gap-1 text-[10px] font-bold text-indigo-500 hover:text-indigo-700 bg-indigo-50 px-3 py-1.5 rounded-lg active:scale-95 transition-all"
+                                >
+                                    <ImageIcon size={14} /> Ver Comprovante
+                                </button>
+                            ) : (
+                                <span className="text-[9px] text-slate-300 font-bold italic pl-1">Sem anexo</span>
+                            )}
                         </div>
 
-                        {/* Lado Direito: Editar/Excluir (Só se não for Admin) */}
+                        {/* Direita: Botões de Ação (Só Vendedor ou Admin se quiser liberar) */}
                         {!isAdmin && (
                             <div className="flex gap-2">
                                 <button 
                                     onClick={() => startEditingPayment(p)} 
-                                    className="p-2 bg-slate-100 text-slate-400 rounded-xl hover:bg-slate-200 active:scale-90 transition-all"
+                                    className="p-1.5 bg-slate-100 text-slate-400 rounded-lg hover:bg-slate-200 active:scale-90 transition-all"
+                                    title="Editar"
                                 >
-                                    <Edit2 size={16}/>
+                                    <Edit2 size={14}/>
                                 </button>
                                 <button 
                                     onClick={() => setConfirmDelete(p)} 
-                                    className="p-2 bg-red-50 text-red-400 rounded-xl hover:bg-red-100 active:scale-90 transition-all"
+                                    className="p-1.5 bg-red-50 text-red-400 rounded-lg hover:bg-red-100 active:scale-90 transition-all"
+                                    title="Excluir"
                                 >
-                                    <Trash2 size={16}/>
+                                    <Trash2 size={14}/>
                                 </button>
                             </div>
                         )}
