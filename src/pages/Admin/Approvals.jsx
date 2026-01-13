@@ -50,18 +50,28 @@ const Approvals = () => {
   };
 
   const handleRejectPayment = async (payment) => {
-      // Se rejeitar, apenas apaga o registro de tentativa de pagamento?
-      // Ou marca como 'rejected'? Vou optar por apagar para limpar a sujeira.
-      if (confirm("Rejeitar e apagar este registro de pagamento?")) {
-          await supabase.from('payments').delete().eq('id', payment.id);
+      // Configura o modal de confirmação para PAGAMENTO
+      setConfirmDialog({
+          title: "Rejeitar Pagamento?",
+          message: "Este registro de pagamento será excluído permanentemente.",
+          action: () => confirmRejectPayment(payment.id) // Passa a função correta
+      });
+  };
+
+  const confirmRejectPayment = async (id) => {
+      setConfirmDialog(null);
+      const { error } = await supabase.from('payments').delete().eq('id', id);
+      
+      if (!error) {
+          setAlertInfo({ type: 'success', title: 'Rejeitado', message: 'Pagamento excluído.' });
           refreshData();
+      } else {
+          setAlertInfo({ type: 'error', title: 'Erro', message: 'Falha ao rejeitar.' });
       }
   };
 
-  // ... (Lógica de Aprovar Pedido mantida igual, omitida para brevidade, mas está no arquivo original) ...
+  // --- LÓGICA DE APROVAR PEDIDO ---
   const confirmApproval = async (orderId, items, newTotal) => {
-    // ... (mesma lógica de antes para pedidos) ...
-    // Vou manter simplificado aqui, copie a lógica completa do arquivo anterior se precisar
     const { error } = await supabase.from('orders').update({ status: 'approved', total: newTotal }).eq('id', orderId);
     if (!error) {
         for (const item of items) {
@@ -70,7 +80,7 @@ const Approvals = () => {
              
              // Baixa estoque se for venda
              const currentOrder = orders.find(o => o.id === orderId);
-             if (currentOrder.type === 'sale') {
+             if (currentOrder && currentOrder.type === 'sale') {
                  const prod = products.find(p => p.id === item.product_id);
                  if (prod) await supabase.from('products').update({ stock: prod.stock - item.qty }).eq('id', prod.id);
              }
@@ -78,14 +88,60 @@ const Approvals = () => {
         setAlertInfo({ type: 'success', title: 'Sucesso', message: 'Pedido aprovado!' });
         setReviewOrder(null);
         refreshData();
+    } else {
+        setAlertInfo({ type: 'error', title: 'Erro', message: 'Falha ao aprovar pedido.' });
     }
+  };
+  
+  // Função chamada pelo Modal de Revisão quando clica em "Recusar"
+  const requestRejectOrder = (data) => {
+      // O OrderReviewModal passa um objeto { title, message, action: 'reject_order', data: orderId }
+      // Mas nosso ConfirmModal espera uma função direta no 'action'.
+      // Vamos adaptar aqui:
+      
+      const orderId = data.data; // O ID vem dentro da propriedade 'data' do objeto
+      
+      setConfirmDialog({
+          title: "Recusar Pedido?",
+          message: "O pedido será marcado como rejeitado e não afetará o estoque.",
+          action: () => confirmRejectOrder(orderId) // Função wrapper
+      });
+  };
+
+  const confirmRejectOrder = async (orderId) => {
+     setConfirmDialog(null);
+     setReviewOrder(null); // Fecha o modal de revisão também
+
+     const { error } = await supabase.from('orders').update({ status: 'rejected' }).eq('id', orderId);
+     
+     if (!error) {
+         setAlertInfo({ type: 'success', title: 'Rejeitado', message: 'O pedido foi recusado.' });
+         refreshData();
+     } else {
+         setAlertInfo({ type: 'error', title: 'Erro', message: 'Falha ao recusar pedido.' });
+     }
   };
 
   return (
     <div className="p-6 space-y-4 pb-24">
        <AlertModal isOpen={!!alertInfo} type={alertInfo?.type} title={alertInfo?.title} message={alertInfo?.message} onClose={() => setAlertInfo(null)} />
-       <ConfirmModal isOpen={!!confirmDialog} title={confirmDialog?.title} message={confirmDialog?.message} onCancel={() => setConfirmDialog(null)} onConfirm={confirmDialog?.action} />
-       {reviewOrder && <OrderReviewModal order={reviewOrder} onClose={() => setReviewOrder(null)} onApprove={confirmApproval} requestConfirm={setConfirmDialog} />}
+       
+       <ConfirmModal 
+            isOpen={!!confirmDialog} 
+            title={confirmDialog?.title} 
+            message={confirmDialog?.message} 
+            onCancel={() => setConfirmDialog(null)} 
+            onConfirm={confirmDialog?.action} 
+       />
+       
+       {reviewOrder && (
+           <OrderReviewModal 
+                order={reviewOrder} 
+                onClose={() => setReviewOrder(null)} 
+                onApprove={confirmApproval} 
+                requestConfirm={requestRejectOrder} // Passa a função correta
+           />
+       )}
 
        <div className="flex items-center gap-3"><button onClick={() => navigate('/')} className="p-3 bg-white rounded-2xl shadow-sm"><ArrowLeft size={20}/></button><h2 className="text-xl font-black text-slate-800 uppercase">Aprovações</h2></div>
        
