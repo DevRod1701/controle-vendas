@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { ArrowLeft, ChevronRight, X, Calendar, Image as ImageIcon, Trash2, Edit2, Link, Clock, CheckCircle2, DollarSign, Undo2, Printer } from 'lucide-react';
+import { ArrowLeft, ChevronRight, X, Calendar, Image as ImageIcon, Trash2, Edit2, Save, Link, Clock, CheckCircle2, DollarSign, Undo2, Printer } from 'lucide-react';
 import { useData } from '../contexts/DataContext';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../services/supabase';
@@ -32,12 +32,12 @@ const History = () => {
 
   const months = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
 
-  // Lógica de Filtro (Competência)
+  // Filtros de Dados
   const filteredData = useMemo(() => {
     let myOrders = orders;
     let myPayments = payments;
 
-    // Filtra por Vendedor
+    // Filtra por Vendedor (Admin ou Logado)
     if (!isAdmin) {
         myOrders = orders.filter(o => o.seller_id === session?.user?.id);
         myPayments = payments.filter(p => {
@@ -72,6 +72,7 @@ const History = () => {
 
   // Estatísticas
   const stats = useMemo(() => {
+    // CORREÇÃO: Garante que apenas vendas (type='sale') sejam somadas
     const totalSales = filteredData.orders.reduce((acc, o) => {
         if (o.type === 'sale' && o.status === 'approved') return acc + Number(o.total || 0);
         return acc;
@@ -111,11 +112,17 @@ const History = () => {
   };
 
   const startEditingPayment = (payment) => {
+      // Formata a data para YYYY-MM-DD
+      let safeDate = '';
+      if (payment.date) {
+        safeDate = new Date(payment.date).toISOString().split('T')[0];
+      }
+
       setEditingPayment(payment);
       setEditForm({
           amount: payment.amount,
-          date: payment.date,
-          method: payment.method,
+          date: safeDate,
+          method: payment.method || 'Dinheiro', 
           description: payment.description || ''
       });
   };
@@ -127,24 +134,29 @@ const History = () => {
       const newAmount = Number(editForm.amount);
       const delta = newAmount - oldAmount;
 
-      const { error } = await supabase.from('payments').update({
-          amount: newAmount,
-          date: editForm.date,
-          method: editForm.method,
-          description: editForm.description
-      }).eq('id', editingPayment.id);
+      try {
+          const { error } = await supabase.from('payments').update({
+              amount: newAmount,
+              date: editForm.date,
+              method: editForm.method,
+              description: editForm.description
+          }).eq('id', editingPayment.id);
 
-      if (!error) {
-          const order = orders.find(o => o.id === editingPayment.order_id);
-          // Só ajusta o saldo do pedido se o pagamento já estava contabilizado (não pendente)
-          if (order && editingPayment.status !== 'pending') {
-              const newPaid = Number(order.paid || 0) + delta;
-              await supabase.from('orders').update({ paid: newPaid }).eq('id', order.id);
+          if (!error) {
+              const order = orders.find(o => o.id === editingPayment.order_id);
+              // Só ajusta o saldo do pedido se o pagamento já estava contabilizado (não pendente)
+              if (order && editingPayment.status !== 'pending') {
+                  const newPaid = Number(order.paid || 0) + delta;
+                  await supabase.from('orders').update({ paid: newPaid }).eq('id', order.id);
+              }
+              setEditingPayment(null);
+              refreshData();
+          } else {
+              alert("Erro ao atualizar pagamento.");
           }
-          setEditingPayment(null);
-          refreshData();
-      } else {
-          alert("Erro ao atualizar pagamento.");
+      } catch (error) {
+          console.error(error);
+          alert("Erro técnico ao salvar.");
       }
   };
 
@@ -156,14 +168,14 @@ const History = () => {
       <ConfirmModal 
         isOpen={!!confirmDelete}
         title="Excluir Pagamento?"
-        message={`Deseja remover o registro de ${formatBRL(confirmDelete?.amount)}?`}
+        message={`Deseja remover o registro de ${formatBRL(confirmDelete?.amount || 0)}?`}
         onConfirm={() => handleDeletePayment(confirmDelete)}
         onCancel={() => setConfirmDelete(null)}
       />
       
       <ImageModal isOpen={!!viewImage} imageUrl={viewImage} onClose={() => setViewImage(null)} />
 
-      {/* Modal de Edição */}
+      {/* Modal de Edição de Pagamento */}
       {editingPayment && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[400] flex items-end sm:items-center justify-center p-4 animate-in fade-in">
             <div className="bg-white w-full max-w-sm rounded-[2.5rem] p-6 shadow-2xl animate-in slide-in-from-bottom-10 space-y-4">
@@ -176,10 +188,28 @@ const History = () => {
                     <label className="text-[10px] font-bold text-slate-400 uppercase ml-2">Valor</label>
                     <input type="number" className="w-full p-4 bg-slate-50 rounded-2xl font-bold outline-none border border-slate-100 focus:border-indigo-200" value={editForm.amount} onChange={e => setEditForm({...editForm, amount: e.target.value})} />
                 </div>
+                
                 <div className="space-y-1">
                     <label className="text-[10px] font-bold text-slate-400 uppercase ml-2">Data</label>
                     <input type="date" className="w-full p-4 bg-slate-50 rounded-2xl font-bold outline-none border border-slate-100 text-slate-600" value={editForm.date} onChange={e => setEditForm({...editForm, date: e.target.value})} />
                 </div>
+                
+                {/* Seletor de Método */}
+                <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase ml-2">Método</label>
+                    <div className="grid grid-cols-4 gap-1">
+                        {['Dinheiro', 'Pix', 'Cartão', 'Consumo'].map(m => (
+                            <button 
+                                key={m} 
+                                onClick={() => setEditForm({...editForm, method: m})} 
+                                className={`py-2 rounded-xl text-[10px] font-bold uppercase transition-all ${editForm.method === m ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500'}`}
+                            >
+                                {m}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+
                 <div className="space-y-1">
                     <label className="text-[10px] font-bold text-slate-400 uppercase ml-2">Descrição</label>
                     <input className="w-full p-4 bg-slate-50 rounded-2xl font-bold outline-none border border-slate-100" value={editForm.description} onChange={e => setEditForm({...editForm, description: e.target.value})} />
@@ -267,7 +297,7 @@ const History = () => {
                                 </p>
                             )}
 
-                             {/* ASSINATURA */}
+                             {/* ASSINATURA DE APROVAÇÃO */}
                             {p.status === 'approved' && p.approver_name && (
                                 <p className="text-[9px] text-green-600 font-bold mt-1 flex items-center gap-1">
                                     <CheckCircle2 size={10}/> Conf: {p.approver_name}
@@ -288,16 +318,16 @@ const History = () => {
                     <div className="flex items-center justify-between mt-1 pt-1 border-t border-slate-50">
                         {/* Esquerda: Comprovante (Se houver) */}
                         <div className="flex-1">
-                            {p.proof ? (
-                                <button 
-                                    onClick={() => setViewImage(p.proof)} 
-                                    className="flex items-center gap-1 text-[10px] font-bold text-indigo-500 hover:text-indigo-700 bg-indigo-50 px-3 py-1.5 rounded-lg active:scale-95 transition-all"
-                                >
-                                    <ImageIcon size={14} /> Ver Comprovante
-                                </button>
-                            ) : (
-                                <span className="text-[9px] text-slate-300 font-bold italic pl-1">Sem anexo</span>
-                            )}
+                        {p.proof ? (
+                            <button 
+                                onClick={() => setViewImage(p.proof)} 
+                                className="flex items-center gap-1 text-[10px] font-bold text-indigo-500 hover:text-indigo-700 bg-indigo-50 px-3 py-1.5 rounded-lg active:scale-95 transition-all"
+                            >
+                                <ImageIcon size={14} /> Ver Comprovante
+                            </button>
+                        ) : (
+                             <span className="text-[9px] text-slate-300 font-bold italic pl-1">Sem anexo</span>
+                        )}
                         </div>
 
                         {/* Direita: Botões de Ação (Só Vendedor ou Admin se quiser liberar) */}
