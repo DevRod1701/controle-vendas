@@ -23,112 +23,100 @@ const Approvals = () => {
   const pendingOrders = orders.filter(o => o.status === 'pending' || o.status === 'return_pending');
   const pendingPayments = payments.filter(p => p.status === 'pending');
 
-    // --- LÓGICA DE APROVAR PEDIDO (VENDA OU DEVOLUÇÃO) ---
+  // --- LÓGICA DE APROVAR PEDIDO (VENDA OU DEVOLUÇÃO) ---
   const confirmApproval = async (orderId, items, newTotal) => {
     try {
-      // 1. Atualiza o status do pedido atual (a devolução ou a venda nova)
-      const { error: orderUpdateError } = await supabase
-        .from('orders')
-        .update({ status: 'approved', total: newTotal })
-        .eq('id', orderId);
-      
-      if (orderUpdateError) throw orderUpdateError;
-
-      // 2. Atualiza os itens do pedido ATUAL (o que está sendo aprovado agora)
-      for (const item of items) {
-        const qtd = Number(item.qty);
-        if (qtd > 0) {
-          await supabase.from('order_items').update({ qty: qtd }).eq('id', item.id);
-        } else {
-          await supabase.from('order_items').delete().eq('id', item.id);
-        }
-      }
-
-      // Busca os dados atualizados do pedido que acabamos de aprovar
-      const { data: currentOrder } = await supabase.from('orders').select('*').eq('id', orderId).single();
-
-      // 3. Movimentação de Estoque
-      for (const item of items) {
-        const qtd = Number(item.qty);
-        if (qtd > 0) {
-          const prod = products.find(p => p.id === item.product_id);
-          if (prod) {
-            // Se for devolução, soma ao estoque. Se for venda, subtrai.
-            const newStock = currentOrder.type === 'return' ? prod.stock + qtd : prod.stock - qtd;
-            await supabase.from('products').update({ stock: newStock }).eq('id', prod.id);
-          }
-        }
-      }
-
-      // 4. LÓGICA DE DEVOLUÇÃO: Atualizar o Pedido Original
-      if (currentOrder.type === 'return' && currentOrder.original_order_id) {
+        // 1. Atualiza o status do pedido atual
+        const { error: orderUpdateError } = await supabase.from('orders').update({ status: 'approved', total: newTotal }).eq('id', orderId);
+        if (orderUpdateError) throw orderUpdateError;
         
-        // Processa cada item devolvido para subtrair do pedido original
-        for (const retItem of items) {
-          const qtdDevolvida = Number(retItem.qty);
-          if (qtdDevolvida <= 0) continue;
-
-          // Busca o item correspondente no pedido original
-          const { data: parentItems } = await supabase
-            .from('order_items')
-            .select('*')
-            .eq('order_id', currentOrder.original_order_id)
-            .eq('product_id', retItem.product_id);
-
-          const parentItem = parentItems?.[0];
-
-          if (parentItem) {
-            const qtdAtual = Number(parentItem.qty);
-            // Subtrai a quantidade. O mínimo é 0.
-            const finalQty = Math.max(0, qtdAtual - qtdDevolvida);
-            
-            // Atualiza a quantidade no item do pedido original
-            await supabase
-              .from('order_items')
-              .update({ qty: finalQty })
-              .eq('id', parentItem.id);
-          }
+        // 2. Atualiza os itens do pedido ATUAL
+        for (const item of items) {
+             const qtd = Number(item.qty);
+             if (qtd > 0) {
+                 await supabase.from('order_items').update({ qty: qtd }).eq('id', item.id);
+             } else {
+                 await supabase.from('order_items').delete().eq('id', item.id);
+             }
         }
 
-        // 5. Recalcula o Total do Pedido Original
-        // Importante: fazemos isso APÓS o loop de itens terminar
-        const { data: remainingItems, error: fetchError } = await supabase
-          .from('order_items')
-          .select('price, qty')
-          .eq('order_id', currentOrder.original_order_id);
-        
-        if (!fetchError && remainingItems) {
-          const newParentTotal = remainingItems.reduce((acc, item) => {
-            return acc + (Number(item.price || 0) * Number(item.qty || 0));
-          }, 0);
+        // Busca o pedido atual atualizado
+        const { data: currentOrder } = await supabase.from('orders').select('*').eq('id', orderId).single();
 
-          // Atualiza o valor total no banco de dados para o pedido original
-          await supabase
-            .from('orders')
-            .update({ total: newParentTotal })
-            .eq('id', currentOrder.original_order_id);
+        // 3. Movimentação de Estoque
+        for (const item of items) {
+            const qtd = Number(item.qty);
+            if (qtd > 0) {
+                const prod = products.find(p => p.id === item.product_id);
+                if (prod) {
+                    const newStock = currentOrder.type === 'return' ? prod.stock + qtd : prod.stock - qtd;
+                    await supabase.from('products').update({ stock: newStock }).eq('id', prod.id);
+                }
+            }
         }
-      }
 
-      setAlertInfo({ 
-        type: 'success', 
-        title: 'Sucesso', 
-        message: currentOrder.type === 'return' ? 'Devolução processada e pedido original atualizado!' : 'Venda aprovada!' 
-      });
-      setReviewOrder(null);
-      refreshData();
+        // 4. LÓGICA CRÍTICA: Se for DEVOLUÇÃO, abater do PEDIDO ORIGINAL
+        if (currentOrder.type === 'return' && currentOrder.original_order_id) {
+             
+             // Para cada item sendo devolvido...
+             for (const retItem of items) {
+                const qtdDevolvida = Number(retItem.qty);
+                
+                if(qtdDevolvida > 0) {
+                    // Tenta achar o item no pedido original pelo ID do produto
+                    let { data: parentItem } = await supabase
+                        .from('order_items')
+                        .select('*')
+                        .eq('order_id', currentOrder.original_order_id)
+                        .eq('product_id', retItem.product_id)
+                        .maybeSingle();
+                    
+                    // FALLBACK: Se não achar pelo ID, tenta pelo NOME
+                    if (!parentItem) {
+                         const { data: parentItemByName } = await supabase
+                            .from('order_items')
+                            .select('*')
+                            .eq('order_id', currentOrder.original_order_id)
+                            .eq('name', retItem.name)
+                            .maybeSingle();
+                         parentItem = parentItemByName;
+                    }
 
+                    // Se achou o item no pedido original, subtrai
+                    if (parentItem) {
+                        const qtdAtual = Number(parentItem.qty);
+                        const finalQty = Math.max(0, qtdAtual - qtdDevolvida);
+                        
+                        // Atualiza a quantidade no pedido original
+                        await supabase.from('order_items').update({ qty: finalQty }).eq('id', parentItem.id);
+                    }
+                }
+             }
+
+             // 5. Recalcula o Total do Pedido Original (Agora que os itens foram atualizados)
+             const { data: remainingItems } = await supabase
+                .from('order_items')
+                .select('*')
+                .eq('order_id', currentOrder.original_order_id);
+             
+             if (remainingItems) {
+                 const newParentTotal = remainingItems.reduce((acc, item) => acc + (Number(item.price) * Number(item.qty)), 0);
+                 await supabase.from('orders').update({ total: newParentTotal }).eq('id', currentOrder.original_order_id);
+             }
+        }
+
+        setAlertInfo({ type: 'success', title: 'Sucesso', message: currentOrder.type === 'return' ? 'Devolução processada!' : 'Venda aprovada!' });
+        setReviewOrder(null);
+        refreshData(); 
     } catch (error) {
-      console.error("Erro na aprovação:", error);
-      setAlertInfo({ type: 'error', title: 'Erro', message: 'Falha ao processar a aprovação.' });
+        console.error(error);
+        setAlertInfo({ type: 'error', title: 'Erro', message: 'Falha ao atualizar banco de dados.' });
     }
   };
-
 
   // --- LÓGICA DE RECUSAR PEDIDO ---
   const requestRejectOrder = (data) => {
       const orderId = data.data || data; 
-      
       setConfirmDialog({
           title: "Recusar Pedido?",
           message: "O pedido será marcado como rejeitado e não afetará o estoque.",
