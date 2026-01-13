@@ -24,9 +24,18 @@ const OrderDetail = ({ order, onClose, refreshData }) => {
     supabase.from('payments').select('*').eq('order_id', order.id).then(({data}) => { if(data) setPayments(data); });
 
     const fetchReturns = async () => {
-        const { data: returnOrders } = await supabase.from('orders').select('*, order_items(*)').eq('original_order_id', order.id).eq('type', 'return');
+        // CORREÇÃO: Adicionado filtro .eq('status', 'approved') para não mostrar devoluções pendentes ou negadas no histórico
+        const { data: returnOrders } = await supabase
+            .from('orders')
+            .select('*, order_items(*)')
+            .eq('original_order_id', order.id)
+            .eq('type', 'return')
+            .eq('status', 'approved');
+
         if (returnOrders && returnOrders.length > 0) {
             setReturnedItemsHistory(returnOrders.flatMap(o => o.order_items));
+        } else {
+            setReturnedItemsHistory([]);
         }
     };
     if (order.type === 'sale') fetchReturns();
@@ -35,8 +44,6 @@ const OrderDetail = ({ order, onClose, refreshData }) => {
   const pendente = Number(order.total) - Number(order.paid || 0);
   const isFullyPaid = pendente <= 0.01;
   
-  // TRAVA DE PAGAMENTO: Só Vendas Aprovadas
-  // Devoluções (type='return') ou Pedidos Pendentes (status='pending') NÃO podem ser pagos
   const canPay = order.status === 'approved' && order.type === 'sale';
 
   const handleFileChange = (e) => {
@@ -49,7 +56,6 @@ const OrderDetail = ({ order, onClose, refreshData }) => {
   };
 
   const handlePay = async () => {
-    // Verificação de Segurança
     if (!canPay) {
         setAlertInfo({ type: 'error', title: 'Bloqueado', message: 'Apenas vendas aprovadas podem receber pagamento.' });
         return;
@@ -123,7 +129,6 @@ const OrderDetail = ({ order, onClose, refreshData }) => {
               {order.type !== 'return' && <div className="text-red-500">Falta: {formatBRL(pendente)}</div>}
            </div>
            
-           {/* AVISO VISUAL - Motivo do bloqueio */}
            {!canPay && (
                <div className="mt-4 bg-gray-100 p-2 rounded-xl text-[10px] font-black text-gray-500 uppercase flex items-center justify-center gap-2">
                    <AlertCircle size={12}/> 
@@ -141,17 +146,13 @@ const OrderDetail = ({ order, onClose, refreshData }) => {
           </div>
         </div>
 
-        {payments.length > 0 && (<div><h3 className="text-sm font-black text-slate-800 uppercase mb-3">Histórico de Pagamentos</h3><div className="space-y-2">{payments.map((p, i) => (<div key={i} className="flex justify-between p-4 bg-green-50 border border-green-100 rounded-2xl"><div><p className="font-bold text-green-800">{p.method}</p><p className="text-[10px] text-green-600">{new Date(p.date).toLocaleDateString()}</p></div><div className="text-right"><p className="font-mono font-bold text-green-700">{formatBRL(p.amount)}</p>{p.proof && <button onClick={() => {const w = window.open(); w.document.write('<img src="'+p.proof+'" style="max-width:100%"/>');}} className="text-[10px] underline text-green-600 font-bold flex items-center gap-1 justify-end mt-1"><ImageIcon size={12}/> Ver Comp.</button>}</div></div>))}</div></div>)}
-
         <div className="fixed bottom-0 left-0 right-0 p-6 bg-white border-t border-slate-100 flex flex-col gap-3">
-          {/* BOTÃO DE PAGAR: Condicionado à aprovação e saldo devedor */}
           {pendente > 0 && canPay && (
               <button onClick={() => setIsPaying(true)} className="w-full py-4 bg-slate-900 text-white rounded-2xl font-bold uppercase shadow-lg flex items-center justify-center gap-2">
                   <DollarSign size={20}/> Pagar
               </button>
           )}
           
-          {/* BOTÃO DE IMPRIMIR */}
           {isAdmin && order.status === 'approved' && (
              <button onClick={() => printOrder(order)} className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold uppercase shadow-lg flex items-center justify-center gap-2">
                 <Printer size={20}/> Imprimir Resumo
