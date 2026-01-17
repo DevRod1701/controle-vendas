@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { ArrowLeft, ChevronRight, X, Calendar, Image as ImageIcon, Trash2, Edit2, Save, Link, Clock, CheckCircle2, DollarSign, Undo2, Printer } from 'lucide-react';
+import { ArrowLeft, ChevronRight, X, Calendar, Image as ImageIcon, Trash2, Edit2, Save, Link, Clock, CheckCircle2, DollarSign, Undo2, Printer, Upload } from 'lucide-react';
 import { useData } from '../contexts/DataContext';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../services/supabase';
@@ -24,7 +24,8 @@ const History = () => {
   const [viewImage, setViewImage] = useState(null);
   
   const [editingPayment, setEditingPayment] = useState(null);
-  const [editForm, setEditForm] = useState({ amount: '', date: '', method: '', description: '' });
+  const [editForm, setEditForm] = useState({ amount: '', date: '', method: '', description: '', proof: '' });
+  const [proofFile, setProofFile] = useState(null);
   
   const [month, setMonth] = useState(new Date().getMonth());
   const [year, setYear] = useState(new Date().getFullYear());
@@ -100,17 +101,31 @@ const History = () => {
     }
   };
 
+  const handleFileChange = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => { 
+          setEditForm({...editForm, proof: reader.result}); 
+          setProofFile(file.name); 
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
   const startEditingPayment = (payment) => {
       let safeDate = '';
       if (payment.date) {
         safeDate = new Date(payment.date).toISOString().split('T')[0];
       }
       setEditingPayment(payment);
+      setProofFile(payment.proof ? "Comprovante Atual" : null);
       setEditForm({
           amount: payment.amount,
           date: safeDate,
           method: payment.method || 'Dinheiro', 
-          description: payment.description || ''
+          description: payment.description || '',
+          proof: payment.proof || ''
       });
   };
 
@@ -121,7 +136,6 @@ const History = () => {
       const newAmount = Number(editForm.amount);
       const delta = newAmount - oldAmount;
 
-      // TRAVA DE SEGURANÇA: Se o novo método for Dinheiro, o status volta para 'pending'
       const isNewMethodCash = editForm.method === 'Dinheiro';
       const newStatus = isNewMethodCash ? 'pending' : editingPayment.status;
 
@@ -131,24 +145,22 @@ const History = () => {
               date: editForm.date,
               method: editForm.method,
               description: editForm.description,
-              status: newStatus // Aplica o novo status
+              proof: editForm.proof, // Atualiza o anexo (ou remove se estiver vazio)
+              status: newStatus
           }).eq('id', editingPayment.id);
 
           if (!error) {
               const order = orders.find(o => o.id === editingPayment.order_id);
               
               if (order) {
-                  // Se o pagamento ERA aprovado e CONTINUA aprovado, apenas ajusta o delta
                   if (editingPayment.status !== 'pending' && newStatus !== 'pending') {
                       const newPaid = Number(order.paid || 0) + delta;
                       await supabase.from('orders').update({ paid: newPaid }).eq('id', order.id);
                   } 
-                  // Se o pagamento ERA aprovado mas agora virou PENDENTE (mudou para dinheiro), estorna o valor original
                   else if (editingPayment.status !== 'pending' && newStatus === 'pending') {
                       const newPaid = Math.max(0, Number(order.paid || 0) - oldAmount);
                       await supabase.from('orders').update({ paid: newPaid }).eq('id', order.id);
                   }
-                  // Se já era pendente e continua pendente, não faz nada no saldo do pedido
               }
 
               if (isNewMethodCash) {
@@ -181,7 +193,7 @@ const History = () => {
 
       {editingPayment && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[400] flex items-end sm:items-center justify-center p-4 animate-in fade-in">
-            <div className="bg-white w-full max-w-sm rounded-[2.5rem] p-6 shadow-2xl animate-in slide-in-from-bottom-10 space-y-4">
+            <div className="bg-white w-full max-w-sm rounded-[2.5rem] p-6 shadow-2xl animate-in slide-in-from-bottom-10 space-y-4 overflow-y-auto max-h-[90vh]">
                 <div className="flex justify-between items-center">
                     <h3 className="text-lg font-black text-slate-800 uppercase">Editar Pagamento</h3>
                     <button onClick={() => setEditingPayment(null)} className="p-2 bg-slate-100 rounded-full"><X size={20}/></button>
@@ -206,6 +218,32 @@ const History = () => {
                     <label className="text-[10px] font-bold text-slate-400 uppercase ml-2">Descrição</label>
                     <input className="w-full p-4 bg-slate-50 rounded-2xl font-bold outline-none border border-slate-100" value={editForm.description} onChange={e => setEditForm({...editForm, description: e.target.value})} />
                 </div>
+
+                {/* EDIÇÃO DE ANEXO */}
+                <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase ml-2">Comprovante</label>
+                    {editForm.proof ? (
+                        <div className="relative w-full p-4 bg-indigo-50 rounded-2xl border-2 border-indigo-100 flex items-center justify-between">
+                            <div className="flex items-center gap-2 text-indigo-600">
+                                <ImageIcon size={18}/>
+                                <span className="text-xs font-bold uppercase">Anexo Carregado</span>
+                            </div>
+                            <button 
+                                onClick={() => { setEditForm({...editForm, proof: ''}); setProofFile(null); }} 
+                                className="p-2 bg-white text-red-500 rounded-xl shadow-sm active:scale-90"
+                                title="Remover Anexo"
+                            >
+                                <Trash2 size={16}/>
+                            </button>
+                        </div>
+                    ) : (
+                        <label className="w-full p-4 bg-slate-50 rounded-2xl border-2 border-dashed border-slate-200 flex items-center justify-center gap-2 cursor-pointer text-slate-400 font-bold text-xs hover:bg-slate-100 transition-colors">
+                            <Upload size={16}/> {proofFile || "Anexar Novo Comprovante"}
+                            <input type="file" className="hidden" accept="image/*" onChange={handleFileChange} />
+                        </label>
+                    )}
+                </div>
+
                 <button onClick={handleUpdatePayment} className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase shadow-lg active:scale-95 flex items-center justify-center gap-2">
                     <Save size={18}/> Salvar Alterações
                 </button>
@@ -270,7 +308,13 @@ const History = () => {
           </div>
       ) : (
           <div className="space-y-3">
-              {filteredData.payments.map(p => (
+              {filteredData.payments.map(p => {
+                  // LÓGICA DE PERMISSÃO: Apenas o dono do pagamento pode editar/excluir
+                  const originalOrder = orders.find(o => o.id === p.order_id);
+                  const isOwner = originalOrder && originalOrder.seller_id === session?.user?.id;
+                  const canModify = isOwner; // Admin não edita pagamentos de outros aqui
+
+                  return (
                   <div key={p.id} className="bg-white p-5 rounded-[2rem] border border-slate-100 shadow-sm space-y-3">
                       <div className="flex items-center justify-between">
                           <div className="flex items-center gap-3">
@@ -284,13 +328,20 @@ const History = () => {
                           </div>
                           <div className="flex items-center gap-1">
                               {p.proof && <button onClick={() => setViewImage(p.proof)} className="p-2 bg-slate-50 text-slate-400 rounded-lg active:scale-90"><ImageIcon size={16}/></button>}
-                              <button onClick={() => startEditingPayment(p)} className="p-2 bg-slate-50 text-indigo-400 rounded-lg active:scale-90"><Edit2 size={16}/></button>
-                              <button onClick={() => setConfirmDelete(p)} className="p-2 bg-red-50 text-red-400 rounded-lg active:scale-90"><Trash2 size={16}/></button>
+                              
+                              {/* BOTÕES CONDICIONAIS: Só aparecem para o dono */}
+                              {canModify && (
+                                  <>
+                                      <button onClick={() => startEditingPayment(p)} className="p-2 bg-slate-50 text-indigo-400 rounded-lg active:scale-90"><Edit2 size={16}/></button>
+                                      <button onClick={() => setConfirmDelete(p)} className="p-2 bg-red-50 text-red-400 rounded-lg active:scale-90"><Trash2 size={16}/></button>
+                                  </>
+                              )}
                           </div>
                       </div>
                       {p.description && <p className="text-[10px] text-slate-500 bg-slate-50 p-2 rounded-lg italic">"{p.description}"</p>}
                   </div>
-              ))}
+                  )
+              })}
               {filteredData.payments.length === 0 && <div className="py-20 text-center"><p className="text-xs font-bold text-slate-400 uppercase">Nenhum pagamento neste mês.</p></div>}
           </div>
       )}
