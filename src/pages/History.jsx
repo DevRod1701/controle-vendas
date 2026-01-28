@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { ArrowLeft, ChevronRight, X, Calendar,Loader2, Image as ImageIcon, Trash2, Edit2, Save, Link, Clock, CheckCircle2, DollarSign, Undo2, Upload, ChevronDown, ChevronUp, AlertCircle, ChevronLeft } from 'lucide-react';
+import { ArrowLeft, ChevronRight, X, Calendar, Loader2, Image as ImageIcon, Trash2, Edit2, Save, Link, Clock, CheckCircle2, DollarSign, Undo2, Upload, ChevronDown, ChevronUp, AlertCircle, ChevronLeft } from 'lucide-react';
 import { useData } from '../contexts/DataContext';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../services/supabase';
@@ -8,8 +8,6 @@ import { formatBRL } from '../utils/formatters';
 import OrderDetail from '../components/OrderDetail';
 import ConfirmModal from '../components/modals/ConfirmModal';
 import ImageModal from '../components/modals/ImageModal';
-
-// REMOVIDO: import { printOrder } from '../utils/printHandler'; (Isso causava o erro e não estava sendo usado aqui)
 
 const History = () => {
   const { orders, payments, refreshData } = useData();
@@ -22,12 +20,13 @@ const History = () => {
 
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null); 
-  const [viewImages, setViewImages] = useState(null); // Array de imagens
+  const [viewImages, setViewImages] = useState(null); 
   const [currentImgIdx, setCurrentImgIdx] = useState(0);
   
   const [editingPayment, setEditingPayment] = useState(null);
   const [editForm, setEditForm] = useState({ amount: '', date: '', method: '', description: '', proofs: [] });
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false); // NOVO: Estado de loading para exclusão
   
   const [month, setMonth] = useState(new Date().getMonth());
   const [year, setYear] = useState(new Date().getFullYear());
@@ -145,19 +144,48 @@ const History = () => {
       }
   };
 
+  // --- FUNÇÃO DELETAR CORRIGIDA (Race Condition Fix) ---
   const handleDeletePayment = async (payment) => {
+    if (isDeleting) return; // Bloqueia cliques repetidos
+    setIsDeleting(true);
     setConfirmDelete(null);
-    const { error } = await supabase.from('payments').delete().eq('id', payment.id);
-    
-    if (!error) {
-        const order = orders.find(o => o.id === payment.order_id);
-        if (order && payment.status !== 'pending') {
-            const newPaid = Math.max(0, Number(order.paid || 0) - Number(payment.amount));
-            await supabase.from('orders').update({ paid: newPaid }).eq('id', order.id);
+
+    try {
+        // 1. Busca o estado ATUAL do pedido no banco (para ter o valor 'paid' mais recente)
+        const { data: currentOrder, error: orderError } = await supabase
+            .from('orders')
+            .select('id, paid')
+            .eq('id', payment.order_id)
+            .single();
+
+        if (orderError) throw orderError;
+
+        // 2. Deleta o pagamento
+        const { error: deleteError } = await supabase
+            .from('payments')
+            .delete()
+            .eq('id', payment.id);
+        
+        if (deleteError) throw deleteError;
+
+        // 3. Atualiza o saldo do pedido (usando o valor fresco do banco)
+        if (currentOrder && payment.status !== 'pending') {
+            const newPaid = Math.max(0, Number(currentOrder.paid || 0) - Number(payment.amount));
+            const { error: updateError } = await supabase
+                .from('orders')
+                .update({ paid: newPaid })
+                .eq('id', currentOrder.id);
+
+            if (updateError) throw updateError;
         }
-        refreshData();
-    } else {
+
+        await refreshData();
+        
+    } catch (error) {
+        console.error(error);
         setErrorModal({ title: "Erro", message: "Não foi possível excluir o pagamento." });
+    } finally {
+        setIsDeleting(false);
     }
   };
 
@@ -220,12 +248,10 @@ const History = () => {
       const finalProof = editForm.proofs.length > 1 ? JSON.stringify(editForm.proofs) : (editForm.proofs[0] || '');
 
       try {
-          // LÓGICA DE SINCRONIZAÇÃO: Se for parte de um lote, atualiza descrição e anexos de todos do lote
           const isPartOfBatch = filteredData.payments.find(p => p.isGroup && p.items.some(item => item.id === editingPayment.id));
           
           if (isPartOfBatch) {
               const batchIds = isPartOfBatch.items.map(i => i.id);
-              // Atualiza todos do lote com a nova descrição e anexos
               await supabase.from('payments').update({ 
                   description: editForm.description, 
                   proof: finalProof,
@@ -234,7 +260,6 @@ const History = () => {
                   status: newStatus
               }).in('id', batchIds);
               
-              // O valor (amount) é editado apenas para o item específico selecionado
               await supabase.from('payments').update({ amount: newAmount }).eq('id', editingPayment.id);
           } else {
               await supabase.from('payments').update({
@@ -271,7 +296,18 @@ const History = () => {
   if (selectedOrder) return <OrderDetail order={selectedOrder} onClose={() => setSelectedOrder(null)} refreshData={refreshData} />;
 
   return (
-    <div className="p-6 pb-40 space-y-4 animate-in fade-in text-left font-bold">
+    <div className="p-6 pb-40 space-y-4 animate-in fade-in text-left font-bold relative">
+      
+      {/* LOADING OVERLAY PARA DELEÇÃO */}
+      {isDeleting && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[999] flex items-center justify-center animate-in fade-in">
+            <div className="bg-white p-6 rounded-2xl shadow-xl flex flex-col items-center gap-3">
+                <Loader2 className="animate-spin text-indigo-600" size={32} />
+                <span className="font-bold text-slate-700 text-sm">Atualizando saldos...</span>
+            </div>
+        </div>
+      )}
+
       {/* MODAL DE ERRO */}
       {errorModal && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[500] flex items-center justify-center p-6 animate-in fade-in">
