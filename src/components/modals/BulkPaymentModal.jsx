@@ -84,7 +84,7 @@ const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
             reader.onloadend = () => {
                 setPaymentData(prev => ({
                     ...prev,
-                    proofs: [...prev.proofs, reader.result] // Simplificado para salvar apenas a string base64
+                    proofs: [...prev.proofs, reader.result] 
                 }));
             };
             reader.readAsDataURL(file);
@@ -117,13 +117,26 @@ const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
         setAlertInfo({ type: 'error', title: 'Atenção', message: 'Selecione pelo menos um pedido para pagar.' });
         return;
     }
+
+    const amountToPay = parseFloat(paymentData.amount);
+
+    // --- NOVA VALIDAÇÃO: Impede valor maior que o total selecionado ---
+    if (amountToPay > selectedDebtTotal + 0.01) {
+        setAlertInfo({ 
+            type: 'error', 
+            title: 'Valor Inválido', 
+            message: `O valor do pagamento não pode ser maior que o total selecionado (${formatBRL(selectedDebtTotal)}).` 
+        });
+        return;
+    }
+    // ----------------------------------------------------------------
     
     setIsSubmitting(true);
     const isCash = paymentData.method === 'Dinheiro';
     const status = isCash ? 'pending' : 'approved';
 
     try {
-        let remaining = parseFloat(paymentData.amount);
+        let remaining = amountToPay;
         const targetOrders = unpaidOrders
             .filter(o => selectedIds.includes(o.id))
             .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
@@ -134,7 +147,6 @@ const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
             finalDescription = `Liquidação Mensal (${monthLabel}) - Conferência de Comprovantes em Lote. ${paymentData.observation}`.trim();
         }
 
-        // CORREÇÃO: Salva todos os anexos como JSON se for modo mensal
         const finalProof = selectionMode === 'month' 
             ? (paymentData.proofs.length > 1 ? JSON.stringify(paymentData.proofs) : (paymentData.proofs[0] || ''))
             : paymentData.proof;
@@ -150,7 +162,7 @@ const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
                     amount: payAmount,
                     date: paymentData.date,
                     method: paymentData.method,
-                    proof: finalProof, // Agora salva todos os anexos sincronizados
+                    proof: finalProof, 
                     description: finalDescription,
                     status: status
                 }]);
@@ -164,7 +176,6 @@ const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
             }
         }
         
-        // SUCESSO: Mostra o modal e agenda o fecho
         setAlertInfo({ 
             type: 'success', 
             title: isCash ? 'Aguardando Conferência' : 'Sucesso', 
@@ -173,7 +184,7 @@ const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
 
         setTimeout(() => {
             onClose();
-            if (onConfirm) onConfirm(); // Atualiza os dados via contexto/prop
+            if (onConfirm) onConfirm(); 
         }, 2000);
 
     } catch (e) {

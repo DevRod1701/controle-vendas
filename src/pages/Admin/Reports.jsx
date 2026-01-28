@@ -1,11 +1,14 @@
 import React, { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
-    ArrowLeft, Calendar, User, Filter, PieChart, 
-    TrendingUp, TrendingDown, DollarSign, FileText, Printer, Search, ChevronLeft, ChevronRight, ChevronDown, ChevronUp
+    ArrowLeft, PieChart, TrendingUp, FileText, Printer, Search, ChevronLeft, ChevronRight, ChevronDown, ChevronUp
 } from 'lucide-react';
 import { useData } from '../../contexts/DataContext';
 import { formatBRL } from '../../utils/formatters';
+import { executePrint } from '../../utils/printHandler';
+
+// IMPORTANTE: Certifique-se que o reportTemplate.js está nesta pasta (igual ao orderDetailTemplate)
+import { reportTemplate } from '../../utils/print/reportTemplate'; 
 
 const Reports = () => {
   const navigate = useNavigate();
@@ -62,19 +65,12 @@ const Reports = () => {
         return matchDate && matchSeller && matchStatus;
     });
 
-    // Filtra Pagamentos (Lógica ajustada para COMPETÊNCIA)
+    // Filtra Pagamentos
     const filteredPayments = payments.filter(p => {
-        // Encontra o pedido original para usar a data DELE como referência
         const originalOrder = orders.find(o => o.id === p.order_id);
-        
-        // Se o pedido existir, usa a data do pedido (competência). 
-        // Se não (pagamento avulso/erro), usa a data do pagamento.
         const referenceDate = originalOrder ? new Date(originalOrder.created_at) : new Date(p.date + 'T12:00:00');
-        
         const matchDate = referenceDate >= start && referenceDate <= end;
-        
         const matchSeller = selectedSeller === 'all' || (originalOrder && originalOrder.seller_id === selectedSeller);
-        
         return matchDate && matchSeller;
     });
 
@@ -131,87 +127,46 @@ const Reports = () => {
   const filteredSellers = sellersList.filter(s => s.name.toLowerCase().includes(sellerSearch.toLowerCase()));
   const currentSellerName = selectedSeller === 'all' ? 'Todos os Vendedores' : sellersList.find(s => s.id === selectedSeller)?.name || 'Vendedor';
 
-  // --- FUNÇÃO DE IMPRESSÃO TÉRMICA ---
+  
+  // --- FUNÇÃO DE IMPRESSÃO TÉRMICA (ATUALIZADA) ---
   const generateThermalReport = () => {
     const periodStr = dateMode === 'month' 
         ? `${monthsList[Number(selectedMonthStr.split('-')[1])-1]}/${selectedMonthStr.split('-')[0]}` 
         : `${new Date(customStart).toLocaleDateString()} a ${new Date(customEnd).toLocaleDateString()}`;
 
-    // Gera HTML dos itens baseado no filtro
-    let detailsHtml = '';
+    // 1. PREPARAÇÃO DOS PEDIDOS
+    const ordersFormatted = filteredData.orders.map(o => ({
+        date: new Date(o.created_at).toLocaleDateString(),
+        desc: `#${o.id.slice(0,4)}`,
+        value: `${o.type === 'return' ? '-' : ''}${formatBRL(o.total)}`
+    }));
 
-    if (reportType !== 'payments' && filteredData.orders.length > 0) {
-        detailsHtml += `<div style="margin-top: 10px; font-weight: bold; border-bottom: 1px solid #000;">PEDIDOS</div>`;
-        filteredData.orders.forEach(o => {
-            detailsHtml += `
-            <div style="display: flex; justify-content: space-between; margin: 4px 0; font-size: 12px;">
-                <span>${new Date(o.created_at).toLocaleDateString()} - #${o.id.slice(0,4)}</span>
-                <span>${o.type === 'return' ? '-' : ''}${formatBRL(o.total)}</span>
-            </div>`;
-        });
-    }
+    // 2. PREPARAÇÃO DOS PAGAMENTOS
+    const paymentsFormatted = filteredData.payments.map(p => ({
+        date: new Date(p.date).toLocaleDateString(),
+        desc: p.method, // Ex: "Pix", "Dinheiro"
+        value: formatBRL(p.amount)
+    }));
 
-    if (reportType !== 'orders' && filteredData.payments.length > 0) {
-        detailsHtml += `<div style="margin-top: 10px; font-weight: bold; border-bottom: 1px solid #000;">PAGAMENTOS</div>`;
-        filteredData.payments.forEach(p => {
-            detailsHtml += `
-            <div style="display: flex; justify-content: space-between; margin: 4px 0; font-size: 12px;">
-                <span>${new Date(p.date).toLocaleDateString()} - ${p.method}</span>
-                <span>${formatBRL(p.amount)}</span>
-            </div>`;
-        });
-    }
+    // 3. TOTAIS
+    const templateStats = {
+        netSales: formatBRL(stats.netSales),
+        commission: formatBRL(stats.commission),
+        totalReceived: formatBRL(stats.totalReceived)
+    };
 
-    const content = `
-      <html>
-        <head>
-          <title>Relatório</title>
-          <style>
-            @page { size: 58mm auto; margin: 0; }
-            body { font-family: 'Courier New', monospace; width: 58mm; margin: 0; padding: 5px; color: #000; font-size: 12px; line-height: 1.2; }
-            h2 { font-size: 16px; text-align: center; margin: 5px 0; font-weight: 900; }
-            .divider { border-top: 1px dashed #000; margin: 10px 0; }
-            .info { font-size: 12px; margin-bottom: 5px; }
-            .total-row { display: flex; justify-content: space-between; font-weight: bold; margin: 2px 0; }
-            .big-total { font-size: 14px; font-weight: 900; margin-top: 5px; text-align: right; }
-            .no-print { display: none; }
-            .close-btn { display: block; width: 100%; padding: 10px; background: #000; color: #fff; text-align: center; text-decoration: none; margin-top: 10px; cursor: pointer;}
-            @media print { .close-btn { display: none; } }
-          </style>
-        </head>
-        <body>
-          <button onclick="window.close()" class="close-btn">FECHAR</button>
-          <h2>RELATÓRIO</h2>
-          <div class="info" style="text-align:center;">${periodStr}</div>
-          <div class="info" style="text-align:center;">${currentSellerName}</div>
-          
-          <div class="divider"></div>
-          
-          ${reportType !== 'payments' ? `
-          <div class="total-row"><span>Vendas Liq:</span><span>${formatBRL(stats.netSales)}</span></div>
-          <div class="total-row"><span>Comissão:</span><span>${formatBRL(stats.commission)}</span></div>
-          ` : ''}
-          ${reportType !== 'orders' ? `
-          <div class="total-row"><span>Recebido:</span><span>${formatBRL(stats.totalReceived)}</span></div>
-          ` : ''}
+    // 4. GERA O HTML (Passando listas separadas)
+    const htmlContent = reportTemplate({
+        periodStr,
+        currentSellerName,
+        stats: templateStats,
+        orders: ordersFormatted,      // Lista separada de pedidos
+        payments: paymentsFormatted,  // Lista separada de pagamentos
+        reportType: reportType
+    });
 
-          <div class="divider"></div>
-          
-          ${detailsHtml}
-          
-          <div class="divider"></div>
-          <div style="text-align: center; font-size: 10px;">Gerado em ${new Date().toLocaleString()}</div>
-
-          <script>
-             setTimeout(function() { window.print(); }, 500);
-          </script>
-        </body>
-      </html>
-    `;
-
-    const win = window.open('', '_blank', 'width=350,height=600');
-    win.document.write(content);
-    win.document.close();
+    // 5. IMPRIME
+    executePrint(htmlContent);
   };
 
   return (
@@ -273,7 +228,7 @@ const Reports = () => {
             </div>
         </div>
 
-        {/* Seleção de Datas Otimizada */}
+        {/* Seleção de Datas */}
         {dateMode === 'month' ? (
             <div className="relative">
                 <button onClick={() => setShowMonthPicker(!showMonthPicker)} className="w-full p-4 bg-slate-50 rounded-2xl font-bold text-slate-800 flex justify-between items-center">
@@ -319,7 +274,7 @@ const Reports = () => {
         </div>
       </div>
 
-      {/* --- CARDS DE TOTAIS (VISUAL MELHORADO) --- */}
+      {/* --- CARDS DE TOTAIS --- */}
       <div className="space-y-3 print:hidden">
         {(reportType === 'full' || reportType === 'orders') && (
             <div className="bg-gradient-to-r from-green-500 to-emerald-600 p-6 rounded-[2.5rem] text-white shadow-lg shadow-green-100 relative overflow-hidden">
@@ -350,59 +305,56 @@ const Reports = () => {
         )}
       </div>
 
-      {/* --- RANKING DE PRODUTOS (SIMPLIFICADO) --- */}
+      {/* --- RANKING DE PRODUTOS --- */}
       {(reportType !== 'payments' && stats.ranking.length > 0) && (
           <div className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-50 space-y-4 print:hidden">
             <h3 className="text-sm font-black text-slate-800 uppercase flex items-center gap-2"><PieChart size={16}/> Desempenho</h3>
             
-            {/* Top 1 e Último (Padrão) */}
-            <div className="space-y-3">
-                {/* Campeão */}
-                <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-full bg-green-100 text-green-600 flex items-center justify-center font-black text-xs">1º</div>
+            {/* Top 1 */}
+            <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-full bg-green-100 text-green-600 flex items-center justify-center font-black text-xs">1º</div>
+                <div className="flex-1">
+                    <p className="text-xs font-bold text-slate-800">{stats.ranking[0].name}</p>
+                    <div className="h-1.5 w-full bg-slate-100 rounded-full mt-1 overflow-hidden">
+                        <div className="h-full bg-green-500 w-full"></div>
+                    </div>
+                </div>
+                <div className="text-right">
+                    <p className="text-xs font-black text-slate-800">{stats.ranking[0].qty} un</p>
+                </div>
+            </div>
+
+            {/* Lista Expandida */}
+            {expandRanking && stats.ranking.slice(1, -1).map((prod, idx) => (
+                <div key={prod.name} className="flex items-center gap-3 animate-in fade-in">
+                    <div className="w-8 text-center font-bold text-xs text-slate-300">#{idx + 2}</div>
                     <div className="flex-1">
-                        <p className="text-xs font-bold text-slate-800">{stats.ranking[0].name}</p>
+                        <p className="text-xs font-bold text-slate-600">{prod.name}</p>
                         <div className="h-1.5 w-full bg-slate-100 rounded-full mt-1 overflow-hidden">
-                            <div className="h-full bg-green-500 w-full"></div>
+                            <div className="h-full bg-slate-400" style={{ width: `${(prod.qty / stats.ranking[0].qty) * 100}%` }}></div>
                         </div>
                     </div>
                     <div className="text-right">
-                        <p className="text-xs font-black text-slate-800">{stats.ranking[0].qty} un</p>
+                        <p className="text-xs font-bold text-slate-500">{prod.qty} un</p>
                     </div>
                 </div>
+            ))}
 
-                {/* Lista Expandida (Meio) */}
-                {expandRanking && stats.ranking.slice(1, -1).map((prod, idx) => (
-                    <div key={prod.name} className="flex items-center gap-3 animate-in fade-in">
-                        <div className="w-8 text-center font-bold text-xs text-slate-300">#{idx + 2}</div>
-                        <div className="flex-1">
-                            <p className="text-xs font-bold text-slate-600">{prod.name}</p>
-                            <div className="h-1.5 w-full bg-slate-100 rounded-full mt-1 overflow-hidden">
-                                <div className="h-full bg-slate-400" style={{ width: `${(prod.qty / stats.ranking[0].qty) * 100}%` }}></div>
-                            </div>
-                        </div>
-                        <div className="text-right">
-                            <p className="text-xs font-bold text-slate-500">{prod.qty} un</p>
+            {/* Último */}
+            {stats.ranking.length > 1 && (
+                <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-full bg-red-50 text-red-400 flex items-center justify-center font-black text-xs">▼</div>
+                    <div className="flex-1">
+                        <p className="text-xs font-bold text-slate-800">{stats.ranking[stats.ranking.length - 1].name}</p>
+                        <div className="h-1.5 w-full bg-slate-100 rounded-full mt-1 overflow-hidden">
+                            <div className="h-full bg-red-400" style={{ width: `${(stats.ranking[stats.ranking.length - 1].qty / stats.ranking[0].qty) * 100}%` }}></div>
                         </div>
                     </div>
-                ))}
-
-                {/* Último (Menos vendido) - Só mostra se tiver mais de 1 item */}
-                {stats.ranking.length > 1 && (
-                    <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-full bg-red-50 text-red-400 flex items-center justify-center font-black text-xs">▼</div>
-                        <div className="flex-1">
-                            <p className="text-xs font-bold text-slate-800">{stats.ranking[stats.ranking.length - 1].name}</p>
-                            <div className="h-1.5 w-full bg-slate-100 rounded-full mt-1 overflow-hidden">
-                                <div className="h-full bg-red-400" style={{ width: `${(stats.ranking[stats.ranking.length - 1].qty / stats.ranking[0].qty) * 100}%` }}></div>
-                            </div>
-                        </div>
-                        <div className="text-right">
-                            <p className="text-xs font-black text-slate-800">{stats.ranking[stats.ranking.length - 1].qty} un</p>
-                        </div>
+                    <div className="text-right">
+                        <p className="text-xs font-black text-slate-800">{stats.ranking[stats.ranking.length - 1].qty} un</p>
                     </div>
-                )}
-            </div>
+                </div>
+            )}
 
             {/* Botão Expandir */}
             {stats.ranking.length > 2 && (
@@ -417,7 +369,7 @@ const Reports = () => {
           </div>
       )}
 
-      {/* 3. EXTRATO DETALHADO */}
+      {/* --- EXTRATO DETALHADO --- */}
       <div className="space-y-4 pt-4 border-t border-slate-100 print:border-black">
         <h3 className="text-sm font-black text-slate-800 print:text-black uppercase ml-2 flex items-center gap-2"><FileText size={16}/> Extrato Detalhado</h3>
         
@@ -441,9 +393,7 @@ const Reports = () => {
 
         {/* LISTA DE PAGAMENTOS */}
         {(reportType !== 'orders') && filteredData.payments.map(p => {
-             // Encontra o pedido original para mostrar a data correta
              const originalOrder = orders.find(o => o.id === p.order_id);
-             // Data de referência: Pedido ou Pagamento
              const refDate = originalOrder ? new Date(originalOrder.created_at) : new Date(p.date + 'T12:00:00');
 
             return (
@@ -451,7 +401,6 @@ const Reports = () => {
                 <div>
                     <p className="font-black text-green-800">{new Date(p.date).toLocaleDateString()} - Pagamento</p>
                     <p className="text-green-600 font-bold mt-0.5">{p.method} {p.description ? `(${p.description})` : ''}</p>
-                    {/* Se for pagamento de outro mês, mostra a origem */}
                     {originalOrder && (
                         <p className="text-[9px] text-slate-400 mt-1">Ref. Pedido: {refDate.toLocaleDateString()}</p>
                     )}

@@ -1,10 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { ArrowLeft, Upload, DollarSign, Undo2, ImageIcon, AlertCircle, Loader2, Printer, AlertTriangle, CheckCircle2, Clock } from 'lucide-react';
+import { ArrowLeft, Upload, DollarSign, Undo2, AlertCircle, Loader2, Printer, AlertTriangle, CheckCircle2, Clock } from 'lucide-react';
 import { supabase } from '../services/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { formatBRL } from '../utils/formatters';
-import { printOrder } from '../utils/printHandler';
 import AlertModal from './modals/AlertModal';
+
+// IMPORTANTE: Ajuste o caminho dos imports abaixo conforme sua estrutura de pastas
+import { executePrint } from '../utils/printHandler';
+import { orderReportTemplate } from '../utils/print/orderDetailTemplate';
 
 const OrderDetail = ({ order, onClose, refreshData }) => {
   const { session, profile, isAdmin } = useAuth();
@@ -51,8 +54,15 @@ const OrderDetail = ({ order, onClose, refreshData }) => {
 
   const pendente = Number(order.total) - Number(order.paid || 0);
   const isFullyPaid = pendente <= 0.01;
-  
   const canPay = order.status === 'approved' && order.type === 'sale';
+
+  // --- FUNÇÃO DE IMPRESSÃO INTEGRADA ---
+  const handlePrint = () => {
+      // 1. Gera o HTML usando o template
+      const htmlContent = orderReportTemplate(order);
+      // 2. Executa a impressão usando o handler genérico
+      executePrint(htmlContent);
+  };
 
   const handleFileChange = (e) => {
     const file = e.target.files[0];
@@ -68,7 +78,23 @@ const OrderDetail = ({ order, onClose, refreshData }) => {
         setAlertInfo({ type: 'error', title: 'Bloqueado', message: 'Apenas vendas aprovadas podem receber pagamento.' });
         return;
     }
-    if (isSubmitting || !paymentData.amount) return;
+
+    const amountToPay = parseFloat(paymentData.amount);
+
+    if (isSubmitting || !amountToPay) return;
+
+    // --- NOVA VALIDAÇÃO: Bloqueia valor maior que o pendente ---
+    // Adicionamos +0.01 para evitar problemas de arredondamento de float
+    if (amountToPay > pendente + 0.01) {
+        setAlertInfo({ 
+            type: 'error', 
+            title: 'Valor Inválido', 
+            message: `O valor do pagamento não pode ser maior que o saldo devedor (${formatBRL(pendente)}).` 
+        });
+        return;
+    }
+    // -----------------------------------------------------------
+
     setIsSubmitting(true);
 
     const isCash = paymentData.method === 'Dinheiro';
@@ -77,7 +103,7 @@ const OrderDetail = ({ order, onClose, refreshData }) => {
     try {
       const { error: payError } = await supabase.from('payments').insert([{
         order_id: order.id, 
-        amount: parseFloat(paymentData.amount), 
+        amount: amountToPay, 
         date: paymentData.date, 
         method: paymentData.method, 
         proof: paymentData.proof, 
@@ -87,7 +113,7 @@ const OrderDetail = ({ order, onClose, refreshData }) => {
 
       if (!payError) {
         if (!isCash) {
-            const newPaid = Number(order.paid || 0) + parseFloat(paymentData.amount || 0);
+            const newPaid = Number(order.paid || 0) + amountToPay;
             await supabase.from('orders').update({ paid: newPaid }).eq('id', order.id);
         }
 
@@ -108,11 +134,9 @@ const OrderDetail = ({ order, onClose, refreshData }) => {
     }
   };
 
-  // FUNÇÃO RESTAURADA E CORRIGIDA
   const handleReturn = async () => {
     if (isSubmitting) return; 
     
-    // Filtra os itens que o usuário selecionou para devolver
     const itemsToReturn = Object.entries(returnCart)
         .filter(([_, qty]) => qty > 0)
         .map(([productId, qty]) => {
@@ -120,14 +144,13 @@ const OrderDetail = ({ order, onClose, refreshData }) => {
             if (!item) return null;
             return { ...item, qty, product_id: item.product_id }; 
         })
-        .filter(Boolean); // Remove nulos caso algum item não seja encontrado
+        .filter(Boolean);
 
     if(itemsToReturn.length > 0) {
         setIsSubmitting(true);
         try {
           const totalReturn = itemsToReturn.reduce((acc, i) => acc + (Number(i.price || 0) * i.qty), 0);
           
-          // Cria o pedido de devolução
           const { data: newOrder, error } = await supabase.from('orders').insert([{
               seller_id: session.user.id, 
               seller_name: profile.full_name, 
@@ -138,7 +161,6 @@ const OrderDetail = ({ order, onClose, refreshData }) => {
           }]).select().single();
 
           if (!error && newOrder) {
-              // Insere os itens da devolução
               const orderItems = itemsToReturn.map(i => ({ 
                   order_id: newOrder.id, 
                   product_id: i.product_id, 
@@ -167,95 +189,95 @@ const OrderDetail = ({ order, onClose, refreshData }) => {
   const renderAlert = () => ( <AlertModal isOpen={!!alertInfo} type={alertInfo?.type} title={alertInfo?.title} message={alertInfo?.message} onClose={() => setAlertInfo(null)} /> );
 
   if (isPaying) {
-    return (
-      <div className="fixed inset-0 bg-white z-[300] p-6 animate-in slide-in-from-bottom-10 overflow-y-auto font-bold">
-        {renderAlert()}
-        <div className="flex items-center gap-3 mb-6">
-          <button onClick={() => setIsPaying(false)} className="p-3 bg-slate-100 rounded-2xl"><ArrowLeft size={20}/></button>
-          <h2 className="text-xl font-black text-slate-800 uppercase">Pagar</h2>
-        </div>
-        <div className="space-y-4">
-          <div className="bg-slate-50 p-4 rounded-3xl border border-slate-100 text-center">
-            <p className="text-xs text-slate-400 font-bold uppercase">Restante</p>
-            <p className="text-3xl font-black text-slate-800 font-mono">{formatBRL(pendente)}</p>
-          </div>
-          <div className="space-y-1">
-            <label className="text-[10px] font-bold text-slate-400 uppercase ml-2">Valor</label>
-            <input type="number" className="w-full p-4 bg-slate-50 rounded-2xl border-none font-bold text-xl outline-none" value={paymentData.amount} onChange={e => setPaymentData({...paymentData, amount: e.target.value})} placeholder="0,00" />
-          </div>
-          <div className="space-y-1">
-            <label className="text-[10px] font-bold text-slate-400 uppercase ml-2">Descrição (Opcional)</label>
-            <input type="text" className="w-full p-4 bg-slate-50 rounded-2xl border-none font-bold text-sm outline-none" value={paymentData.desc} onChange={e => setPaymentData({...paymentData, desc: e.target.value})} placeholder="Ex: Acerto semanal..." />
-          </div>
-          <div className="space-y-1">
-            <label className="text-[10px] font-bold text-slate-400 uppercase ml-2">Data</label>
-            <input type="date" className="w-full p-4 bg-slate-50 rounded-2xl border-none font-bold text-slate-600 outline-none" value={paymentData.date} onChange={e => setPaymentData({...paymentData, date: e.target.value})} />
-          </div>
-          <div className="space-y-1">
-            <label className="text-[10px] font-bold text-slate-400 uppercase ml-2">Método</label>
-            <div className="grid grid-cols-2 gap-2">
-              {['Dinheiro', 'Pix', 'Cartão', 'Consumo'].map(m => (
-                <button key={m} onClick={() => setPaymentData({...paymentData, method: m})} className={`py-3 rounded-xl text-xs font-bold uppercase ${paymentData.method === m ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500'}`}>{m}</button>
-              ))}
-            </div>
-          </div>
-          <div className="space-y-1">
-            <label className="text-[10px] font-bold text-slate-400 uppercase ml-2">Comprovante</label>
-            <label className="w-full p-4 bg-slate-50 rounded-2xl border-2 border-dashed border-slate-200 flex items-center justify-center gap-2 cursor-pointer text-slate-400 font-bold text-xs hover:bg-slate-50 transition-colors">
-              <Upload size={16}/> {proofFile || "Anexar Imagem"}
-              <input type="file" className="hidden" accept="image/*" onChange={handleFileChange} />
-            </label>
-          </div>
-
-          {paymentData.method === 'Dinheiro' && (
-              <div className="bg-yellow-50 p-4 rounded-2xl flex items-center gap-3 border border-yellow-100 animate-in fade-in">
-                  <AlertTriangle size={20} className="text-yellow-600 flex-shrink-0"/>
-                  <p className="text-[11px] text-yellow-700 font-bold leading-tight uppercase">Pagamentos em dinheiro ficam "Pendentes" até a conferência do Admin.</p>
+      return (
+        <div className="fixed inset-0 bg-white z-[300] p-6 animate-in slide-in-from-bottom-10 overflow-y-auto font-bold">
+           {renderAlert()}
+           <div className="flex items-center gap-3 mb-6">
+             <button onClick={() => setIsPaying(false)} className="p-3 bg-slate-100 rounded-2xl"><ArrowLeft size={20}/></button>
+             <h2 className="text-xl font-black text-slate-800 uppercase">Pagar</h2>
+           </div>
+           <div className="space-y-4">
+              <div className="bg-slate-50 p-4 rounded-3xl border border-slate-100 text-center">
+                <p className="text-xs text-slate-400 font-bold uppercase">Restante</p>
+                <p className="text-3xl font-black text-slate-800 font-mono">{formatBRL(pendente)}</p>
               </div>
-          )}
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-slate-400 uppercase ml-2">Valor</label>
+                <input type="number" className="w-full p-4 bg-slate-50 rounded-2xl border-none font-bold text-xl outline-none" value={paymentData.amount} onChange={e => setPaymentData({...paymentData, amount: e.target.value})} placeholder="0,00" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-slate-400 uppercase ml-2">Descrição (Opcional)</label>
+                <input type="text" className="w-full p-4 bg-slate-50 rounded-2xl border-none font-bold text-sm outline-none" value={paymentData.desc} onChange={e => setPaymentData({...paymentData, desc: e.target.value})} placeholder="Ex: Acerto semanal..." />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-slate-400 uppercase ml-2">Data</label>
+                <input type="date" className="w-full p-4 bg-slate-50 rounded-2xl border-none font-bold text-slate-600 outline-none" value={paymentData.date} onChange={e => setPaymentData({...paymentData, date: e.target.value})} />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-slate-400 uppercase ml-2">Método</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {['Dinheiro', 'Pix', 'Cartão', 'Consumo'].map(m => (
+                    <button key={m} onClick={() => setPaymentData({...paymentData, method: m})} className={`py-3 rounded-xl text-xs font-bold uppercase ${paymentData.method === m ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500'}`}>{m}</button>
+                  ))}
+                </div>
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-slate-400 uppercase ml-2">Comprovante</label>
+                <label className="w-full p-4 bg-slate-50 rounded-2xl border-2 border-dashed border-slate-200 flex items-center justify-center gap-2 cursor-pointer text-slate-400 font-bold text-xs hover:bg-slate-50 transition-colors">
+                  <Upload size={16}/> {proofFile || "Anexar Imagem"}
+                  <input type="file" className="hidden" accept="image/*" onChange={handleFileChange} />
+                </label>
+              </div>
 
-          <button onClick={handlePay} disabled={isSubmitting} className="w-full py-4 bg-green-500 text-white rounded-2xl font-bold uppercase shadow-lg mt-4 disabled:opacity-50 flex items-center justify-center gap-2">
-            {isSubmitting ? <Loader2 className="animate-spin" size={20} /> : "Confirmar Pagamento"}
-          </button>
+              {paymentData.method === 'Dinheiro' && (
+                  <div className="bg-yellow-50 p-4 rounded-2xl flex items-center gap-3 border border-yellow-100 animate-in fade-in">
+                      <AlertTriangle size={20} className="text-yellow-600 flex-shrink-0"/>
+                      <p className="text-[11px] text-yellow-700 font-bold leading-tight uppercase">Pagamentos em dinheiro ficam "Pendentes" até a conferência do Admin.</p>
+                  </div>
+              )}
+
+              <button onClick={handlePay} disabled={isSubmitting} className="w-full py-4 bg-green-500 text-white rounded-2xl font-bold uppercase shadow-lg mt-4 disabled:opacity-50 flex items-center justify-center gap-2">
+                {isSubmitting ? <Loader2 className="animate-spin" size={20} /> : "Confirmar Pagamento"}
+              </button>
+           </div>
         </div>
-      </div>
-    );
+      );
   }
 
   if (isReturning) {
-    return (
-      <div className="fixed inset-0 bg-white z-[300] p-6 animate-in slide-in-from-bottom-10 overflow-y-auto font-bold">
-        {renderAlert()}
-        <div className="flex items-center gap-3 mb-6">
-          <button onClick={() => setIsReturning(false)} className="p-3 bg-slate-100 rounded-2xl"><ArrowLeft size={20}/></button>
-          <h2 className="text-xl font-black text-slate-800 uppercase">Devolver</h2>
-        </div>
-        {order.original_order_id && (
-          <div className="bg-orange-50 p-4 rounded-2xl mb-4 border border-orange-100">
-            <p className="text-[10px] text-orange-400 font-bold uppercase">Devolvendo do Pedido</p>
-            <p className="text-orange-700 font-mono font-bold">#{order.id.slice(0,5)}</p>
-          </div>
-        )}
-        <div className="space-y-3">
-          {order.order_items?.filter(i => i.qty > 0).map(item => (
-            <div key={item.id} className="bg-slate-50 p-4 rounded-2xl flex justify-between items-center border border-slate-100">
-              <div>
-                <p className="font-bold text-slate-800">{item.name}</p>
-                <p className="text-xs text-slate-400">Levou: {item.qty}</p>
-              </div>
-              <div className="flex items-center gap-3">
-                <button onClick={() => setReturnCart(prev => ({...prev, [item.product_id]: Math.max(0, (prev[item.product_id]||0)-1)}))} className="w-8 h-8 bg-white rounded-lg shadow-sm font-bold">-</button>
-                <span className="font-bold w-6 text-center">{returnCart[item.product_id] || 0}</span>
-                <button onClick={() => setReturnCart(prev => ({...prev, [item.product_id]: Math.min(item.qty, (prev[item.product_id]||0)+1)}))} className="w-8 h-8 bg-orange-100 text-orange-600 rounded-lg shadow-sm font-bold">+</button>
-              </div>
+      return (
+        <div className="fixed inset-0 bg-white z-[300] p-6 animate-in slide-in-from-bottom-10 overflow-y-auto font-bold">
+            {renderAlert()}
+            <div className="flex items-center gap-3 mb-6">
+                <button onClick={() => setIsReturning(false)} className="p-3 bg-slate-100 rounded-2xl"><ArrowLeft size={20}/></button>
+                <h2 className="text-xl font-black text-slate-800 uppercase">Devolver</h2>
             </div>
-          ))}
+            {order.original_order_id && (
+              <div className="bg-orange-50 p-4 rounded-2xl mb-4 border border-orange-100">
+                <p className="text-[10px] text-orange-400 font-bold uppercase">Devolvendo do Pedido</p>
+                <p className="text-orange-700 font-mono font-bold">#{order.id.slice(0,5)}</p>
+              </div>
+            )}
+            <div className="space-y-3">
+              {order.order_items?.filter(i => i.qty > 0).map(item => (
+                <div key={item.id} className="bg-slate-50 p-4 rounded-2xl flex justify-between items-center border border-slate-100">
+                  <div>
+                    <p className="font-bold text-slate-800">{item.name}</p>
+                    <p className="text-xs text-slate-400">Levou: {item.qty}</p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <button onClick={() => setReturnCart(prev => ({...prev, [item.product_id]: Math.max(0, (prev[item.product_id]||0)-1)}))} className="w-8 h-8 bg-white rounded-lg shadow-sm font-bold">-</button>
+                    <span className="font-bold w-6 text-center">{returnCart[item.product_id] || 0}</span>
+                    <button onClick={() => setReturnCart(prev => ({...prev, [item.product_id]: Math.min(item.qty, (prev[item.product_id]||0)+1)}))} className="w-8 h-8 bg-orange-100 text-orange-600 rounded-lg shadow-sm font-bold">+</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <button onClick={handleReturn} disabled={isSubmitting} className="w-full py-4 bg-orange-500 text-white rounded-2xl font-bold uppercase shadow-lg mt-6 disabled:opacity-50 flex items-center justify-center gap-2">
+                {isSubmitting ? <Loader2 className="animate-spin" size={20} /> : "Confirmar Devolução"}
+            </button>
         </div>
-        <button onClick={handleReturn} disabled={isSubmitting} className="w-full py-4 bg-orange-500 text-white rounded-2xl font-bold uppercase shadow-lg mt-6 disabled:opacity-50 flex items-center justify-center gap-2">
-          {isSubmitting ? <Loader2 className="animate-spin" size={20} /> : "Confirmar Devolução"}
-        </button>
-      </div>
-    );
+      );
   }
 
   return (
@@ -322,7 +344,7 @@ const OrderDetail = ({ order, onClose, refreshData }) => {
           )}
           
           {isAdmin && order.status === 'approved' && (
-             <button onClick={() => printOrder(order)} className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold uppercase shadow-lg flex items-center justify-center gap-2">
+             <button onClick={handlePrint} className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold uppercase shadow-lg flex items-center justify-center gap-2">
                 <Printer size={20}/> Imprimir Resumo
              </button>
           )}

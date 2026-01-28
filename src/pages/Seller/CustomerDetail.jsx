@@ -18,9 +18,7 @@ const CustomerDetail = () => {
   const customer = customers.find(c => c.id === id);
   const myTrans = customerTransactions.filter(t => t.customer_id === id);
 
-  // --- FUNÇÕES AUXILIARES DE DATA (CORREÇÃO DE FUSO HORÁRIO) ---
-  
-  // Pega a data local correta (YYYY-MM-DD) sem converter para UTC
+  // --- FUNÇÕES AUXILIARES DE DATA ---
   const getTodayLocal = () => {
     const now = new Date();
     const year = now.getFullYear();
@@ -29,7 +27,6 @@ const CustomerDetail = () => {
     return `${year}-${month}-${day}`;
   };
 
-  // Formata YYYY-MM-DD para DD/MM/AAAA sem alterar o dia
   const formatDateDisplay = (dateString) => {
     if (!dateString) return '';
     const parts = dateString.split('-');
@@ -41,7 +38,6 @@ const CustomerDetail = () => {
   const [editForm, setEditForm] = useState({ name: '', phone: '' });
 
   const [mode, setMode] = useState(null); 
-  // CORREÇÃO: Usa getTodayLocal() no lugar de toISOString()
   const [form, setForm] = useState({ description: '', amount: '', date: getTodayLocal() });
   const [productSearch, setProductSearch] = useState('');
   const [selectedProductObj, setSelectedProductObj] = useState(null);
@@ -51,9 +47,7 @@ const CustomerDetail = () => {
   const [alertInfo, setAlertInfo] = useState(null);
   const [confirmDialog, setConfirmDialog] = useState(null);
 
-  // NOVO: Estado para o Modal de Compartilhamento
   const [showShareModal, setShowShareModal] = useState(false);
-  // CORREÇÃO: Usa getTodayLocal()
   const [shareDate, setShareDate] = useState(getTodayLocal());
 
   const currentBalance = useMemo(() => {
@@ -68,7 +62,6 @@ const CustomerDetail = () => {
   }, [products, productSearch]);
 
   // --- FUNÇÕES DE CLIENTE ---
-
   const startEditing = () => {
     setEditForm({ name: customer.name, phone: customer.phone || '' });
     setIsEditing(true);
@@ -117,7 +110,7 @@ const CustomerDetail = () => {
     }
   };
 
-  // --- NOVA LÓGICA DE COMPARTILHAMENTO ---
+  // --- COMPARTILHAMENTO ---
   const handleShareOption = (type) => {
     if (!customer.phone) {
         setAlertInfo({ type: 'error', title: 'Sem Telefone', message: 'Cadastre um telefone para enviar o extrato.' });
@@ -130,18 +123,15 @@ const CustomerDetail = () => {
     let filteredTrans = [];
     let title = "";
 
-    // Filtra as transações com base na escolha
     if (type === 'all') {
         filteredTrans = myTrans;
         title = "EXTRATO COMPLETO";
     } else if (type === 'today') {
-        // CORREÇÃO: Usa getTodayLocal() para garantir que "hoje" é hoje mesmo
         const today = getTodayLocal();
         filteredTrans = myTrans.filter(t => t.date === today);
         title = "RESUMO DE HOJE";
     } else if (type === 'date') {
         filteredTrans = myTrans.filter(t => t.date === shareDate);
-        // CORREÇÃO: Usa formatDateDisplay no título
         title = `RESUMO DO DIA ${formatDateDisplay(shareDate)}`;
     }
 
@@ -150,10 +140,8 @@ const CustomerDetail = () => {
         return;
     }
 
-    // Monta o texto
     const historyText = filteredTrans.map(t => {
         const icon = t.type === 'purchase' ? '🔴' : '🟢';
-        // CORREÇÃO: Usa formatDateDisplay na lista do WhatsApp também
         return `${icon} ${formatDateDisplay(t.date)} - ${t.description}: ${formatBRL(t.amount)}`;
     }).join('\n');
 
@@ -170,12 +158,10 @@ const CustomerDetail = () => {
     setShowShareModal(false);
   };
 
-  // --- FUNÇÕES DE TRANSAÇÃO ---
-
+  // --- TRANSAÇÕES ---
   const handleSelectProduct = (prod) => {
     setSelectedProductObj(prod);
     setQty(1); 
-    // CORREÇÃO: Usa getTodayLocal()
     setForm({ ...form, description: prod.name, amount: prod.price, date: getTodayLocal() });
     setProductSearch(''); 
   };
@@ -222,7 +208,6 @@ const CustomerDetail = () => {
 
   const handleCloseModal = () => {
     setMode(null);
-    // CORREÇÃO: Reseta data para hoje local
     setForm({ description: '', amount: '', date: getTodayLocal() });
     setSelectedProductObj(null);
     setProductSearch('');
@@ -288,7 +273,6 @@ const CustomerDetail = () => {
         <p className={`text-xs uppercase font-black tracking-widest ${currentBalance > 0 ? 'text-red-400' : 'text-green-600'}`}>Saldo Devedor</p>
         <p className={`text-4xl font-black font-mono ${currentBalance > 0 ? 'text-red-500' : 'text-green-600'}`}>{formatBRL(currentBalance)}</p>
         
-        {/* Botão Enviar Extrato que abre o Menu */}
         <button 
             onClick={() => setShowShareModal(true)} 
             className="absolute top-4 right-4 p-2 bg-white/50 rounded-full text-slate-600 hover:bg-green-500 hover:text-white transition-colors active:scale-90"
@@ -298,7 +282,7 @@ const CustomerDetail = () => {
         </button>
       </div>
 
-      {/* MODAL DE OPÇÕES DE COMPARTILHAMENTO */}
+      {/* MODAL DE COMPARTILHAMENTO */}
       {showShareModal && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[350] flex items-end sm:items-center justify-center p-4 animate-in fade-in">
             <div className="bg-white w-full max-w-sm rounded-[2.5rem] p-6 shadow-2xl animate-in slide-in-from-bottom-10 space-y-4">
@@ -441,23 +425,27 @@ const CustomerDetail = () => {
         </div>
       )}
 
-      {/* Histórico */}
+      {/* Histórico Corrigido para Quebra de Linha */}
       <div className="space-y-3">
         <h3 className="text-sm font-black text-slate-800 uppercase ml-2">Histórico</h3>
         {myTrans.length === 0 && <p className="text-center text-slate-400 text-xs py-4">Nenhuma movimentação.</p>}
         {myTrans.map(t => (
-            <div key={t.id} className="bg-white p-4 rounded-[2rem] border border-slate-50 flex justify-between items-center shadow-sm">
-                <div className="flex items-center gap-3">
-                    <div className={`p-3 rounded-xl ${t.type === 'purchase' ? 'bg-slate-100 text-slate-500' : 'bg-green-100 text-green-600'}`}>
+            <div key={t.id} className="bg-white p-4 rounded-[2rem] border border-slate-50 flex justify-between items-start shadow-sm">
+                
+                {/* Lado Esquerdo: Flex-1 + min-w-0 permite que o texto quebre e o container cresça */}
+                <div className="flex items-start gap-3 flex-1 min-w-0">
+                    <div className={`p-3 rounded-xl flex-shrink-0 ${t.type === 'purchase' ? 'bg-slate-100 text-slate-500' : 'bg-green-100 text-green-600'}`}>
                         {t.type === 'purchase' ? <Calendar size={16}/> : <DollarSign size={16}/>}
                     </div>
-                    <div>
-                        <p className="font-black text-slate-800 text-sm">{t.description}</p>
-                        {/* CORREÇÃO: Usa formatDateDisplay aqui também */}
-                        <p className="text-[10px] text-slate-400 font-bold">{formatDateDisplay(t.date)}</p>
+                    <div className="min-w-0 pr-2">
+                        {/* Removemos truncate e usamos break-words para quebrar linhas */}
+                        <p className="font-black text-slate-800 text-sm break-words leading-tight">{t.description}</p>
+                        <p className="text-[10px] text-slate-400 font-bold mt-0.5">{formatDateDisplay(t.date)}</p>
                     </div>
                 </div>
-                <div className="text-right">
+
+                {/* Lado Direito: Flex-shrink-0 impede que o valor seja espremido */}
+                <div className="text-right flex-shrink-0 ml-1">
                     <p className={`font-mono font-black ${t.type === 'purchase' ? 'text-red-400' : 'text-green-500'}`}>
                         {t.type === 'purchase' ? '-' : '+'} {formatBRL(t.amount)}
                     </p>

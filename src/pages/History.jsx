@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { ArrowLeft, ChevronRight, X, Calendar, Image as ImageIcon, Trash2, Edit2, Save, Link, Clock, CheckCircle2, DollarSign, Undo2, Printer, Upload, ChevronDown, ChevronUp, AlertCircle, ChevronLeft } from 'lucide-react';
+import { ArrowLeft, ChevronRight, X, Calendar,Loader2, Image as ImageIcon, Trash2, Edit2, Save, Link, Clock, CheckCircle2, DollarSign, Undo2, Upload, ChevronDown, ChevronUp, AlertCircle, ChevronLeft } from 'lucide-react';
 import { useData } from '../contexts/DataContext';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../services/supabase';
@@ -8,7 +8,8 @@ import { formatBRL } from '../utils/formatters';
 import OrderDetail from '../components/OrderDetail';
 import ConfirmModal from '../components/modals/ConfirmModal';
 import ImageModal from '../components/modals/ImageModal';
-import { printOrder } from '../utils/printHandler';
+
+// REMOVIDO: import { printOrder } from '../utils/printHandler'; (Isso causava o erro e não estava sendo usado aqui)
 
 const History = () => {
   const { orders, payments, refreshData } = useData();
