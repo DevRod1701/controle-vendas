@@ -221,15 +221,34 @@ const Team = () => {
                 
                 {/* Linha 1: Vendas e Total Pago (Compentência) */}
                 <div className="flex gap-3 mb-3">
+                    
+                    {/* Bloco Vendas */}
                     <div className="flex-1 bg-green-50 p-3 rounded-2xl border border-green-100">
-                        <p className="text-[9px] text-green-600 font-black uppercase flex items-center gap-1"><TrendingUp size={10}/> Vendas</p>
-                        <p className="text-lg font-black text-green-700 font-mono">{formatBRL(s.sales)}</p>
+                        <p className="text-[9px] text-green-600 font-black uppercase flex items-center gap-1 mb-1">
+                        <TrendingUp size={10}/> Vendas
+                        </p>
+                        <p className="text-lg font-black text-green-700 font-mono text-center">
+                        {formatBRL(s.sales)}
+                        </p>
                     </div>
+
+                    {/* Bloco Total Pago */}
                     <div className="flex-1 bg-blue-50 p-3 rounded-2xl border border-blue-100">
-                        <p className="text-[9px] text-blue-600 font-black uppercase flex items-center gap-1"><CheckCircle2 size={10}/> Total Pago</p>
-                        <p className="text-lg font-black text-blue-700 font-mono">{formatBRL(totalSettled)}</p>
+                        <p className="text-[9px] text-blue-600 font-black uppercase flex items-center gap-1 mb-1">
+                        <CheckCircle2 size={10}/> Total Pago
+                        </p>
+                        <p
+                        className={`
+                            font-black text-blue-700 font-mono text-center leading-none
+                            ${String(formatBRL(totalSettled)).length > 10 ? 'text-sm' : 'text-lg'}
+                        `}
+                        >
+                        {formatBRL(totalSettled)}
+                        </p>
                     </div>
                 </div>
+
+
                 
                 {/* Linha 2: Comissão */}
                 <div className="bg-indigo-50 p-4 rounded-2xl border border-indigo-100 flex justify-between items-center">

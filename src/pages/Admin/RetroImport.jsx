@@ -33,7 +33,7 @@ const RetroImport = () => {
   const [cart, setCart] = useState([]);
   const [qty, setQty] = useState(1);
   const [itemDiscount, setItemDiscount] = useState('');
-  const [isPaid, setIsPaid] = useState(true);
+  const [isPaid, setIsPaid] = useState(false);
   const [updateStock, setUpdateStock] = useState(false);
 
   // Busca lista de vendedores ao carregar

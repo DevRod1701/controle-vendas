@@ -46,7 +46,7 @@ const SellerDashboard = () => {
       <div className="bg-slate-900 p-8 rounded-[3.5rem] text-white space-y-4 shadow-xl relative border-b-8 border-yellow-400">
         <div className="flex justify-between items-start gap-4">
           
-          <div className="min-w-0">
+          <div className="flex-1 min-w-0">
             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest text-left">
               Minhas Vendas Pendentes
             </p>
