@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, UserPlus, Search, Users, ChevronRight, ChevronLeft, Filter, Phone, Calendar, Clock, List } from 'lucide-react';
+import { ArrowLeft, UserPlus, Search, Users, ChevronRight, ChevronLeft, Filter, Phone, Calendar, Clock, List, X } from 'lucide-react';
 import { useData } from '../../contexts/DataContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase } from '../../services/supabase';
@@ -34,36 +34,101 @@ const Customers = () => {
   const prevMonth = () => { if (month === 0) { setMonth(11); setYear(year - 1); } else { setMonth(month - 1); } };
   const nextMonth = () => { if (month === 11) { setMonth(0); setYear(year + 1); } else { setMonth(month + 1); } };
 
-  // --- LÓGICA PRINCIPAL ---
+  // --- LÓGICA PRINCIPAL (CORRIGIDA COM FIFO/AMORTIZAÇÃO) ---
   const customersWithBalance = useMemo(() => {
     return customers.map(c => {
-      // 1. Filtra transações do cliente
+      // 1. Pega TODAS as transações do cliente
       const allTrans = customerTransactions.filter(t => t.customer_id === c.id);
-      let relevantTrans = allTrans;
-
-      // 2. Aplica Filtro de Tempo
-      if (viewMode === 'month') {
-          relevantTrans = allTrans.filter(t => {
-              const tDate = new Date(t.date + 'T12:00:00');
-              return tDate.getMonth() === month && tDate.getFullYear() === year;
-          });
-      } else if (viewMode === 'day') {
-          relevantTrans = allTrans.filter(t => t.date === selectedDate);
-      }
       
-      // 3. Calcula Saldo
-      const totalPurchase = relevantTrans.filter(t => t.type === 'purchase').reduce((acc, t) => acc + Number(t.amount), 0);
-      const totalPaid = relevantTrans.filter(t => t.type === 'payment').reduce((acc, t) => acc + Number(t.amount), 0);
-      const balance = totalPurchase - totalPaid;
+      // 2. Calcula o "Pool" Global de Pagamentos (Tudo que ele já pagou na vida)
+      let globalPaymentPool = allTrans
+          .filter(t => t.type === 'payment')
+          .reduce((acc, t) => acc + Number(t.amount), 0);
 
-      // Se teve movimentação no período (importante para não mostrar lista vazia nos filtros de tempo)
-      const hasActivity = relevantTrans.length > 0;
+      let balance = 0;
+      let hasActivity = false;
+
+      // --- MODO GERAL (Saldo Total da Vida) ---
+      if (viewMode === 'all') {
+          const totalPurchases = allTrans
+              .filter(t => t.type === 'purchase')
+              .reduce((acc, t) => acc + Number(t.amount), 0);
+          
+          balance = totalPurchases - globalPaymentPool;
+          hasActivity = allTrans.length > 0;
+      } 
+      // --- MODO POR PERÍODO (Amortização FIFO) ---
+      else {
+          // Separa as compras em ordem cronológica
+          const sortedPurchases = allTrans
+              .filter(t => t.type === 'purchase')
+              .sort((a, b) => new Date(a.date) - new Date(b.date));
+
+          let debtBeforePeriod = 0;
+          let debtInPeriod = 0;
+
+          sortedPurchases.forEach(t => {
+              // Ajuste de fuso horário para comparação segura
+              const tDate = new Date(t.date + 'T12:00:00');
+              let isInPeriod = false;
+              let isBeforePeriod = false;
+
+              if (viewMode === 'month') {
+                  // Verifica se é o mês selecionado
+                  isInPeriod = tDate.getMonth() === month && tDate.getFullYear() === year;
+                  // Verifica se é ANTES do mês selecionado
+                  if (!isInPeriod) {
+                      if (tDate.getFullYear() < year || (tDate.getFullYear() === year && tDate.getMonth() < month)) {
+                          isBeforePeriod = true;
+                      }
+                  }
+              } else if (viewMode === 'day') {
+                  // Verifica se é o dia selecionado
+                  isInPeriod = t.date === selectedDate;
+                  // Verifica se é ANTES do dia selecionado
+                  if (!isInPeriod && t.date < selectedDate) {
+                      isBeforePeriod = true;
+                  }
+              }
+
+              if (isInPeriod) {
+                  debtInPeriod += Number(t.amount);
+                  hasActivity = true; // Marcar que comprou neste período
+              } else if (isBeforePeriod) {
+                  debtBeforePeriod += Number(t.amount);
+              }
+          });
+
+          // LÓGICA DE OURO: AMORTIZAÇÃO
+          // 1. O dinheiro total paga primeiro as dívidas antigas (debtBeforePeriod)
+          const amountUsedForOldDebt = Math.min(debtBeforePeriod, globalPaymentPool);
+          
+          // 2. O que sobrar do dinheiro (remainingPool) é usado para abater a dívida do período atual
+          const remainingPool = Math.max(0, globalPaymentPool - amountUsedForOldDebt);
+          const amountPaidForPeriod = Math.min(debtInPeriod, remainingPool);
+
+          // 3. O Saldo do período é: O que comprou no período - O que conseguiu pagar no período
+          balance = debtInPeriod - amountPaidForPeriod;
+
+          // Se não comprou nada, verificamos se PAGOU algo neste período (para exibir na lista)
+          if (!hasActivity) {
+              const paymentInPeriod = allTrans.some(t => {
+                  if (t.type !== 'payment') return false;
+                  if (viewMode === 'day') return t.date === selectedDate;
+                  if (viewMode === 'month') {
+                      const tDate = new Date(t.date + 'T12:00:00');
+                      return tDate.getMonth() === month && tDate.getFullYear() === year;
+                  }
+                  return false;
+              });
+              if (paymentInPeriod) hasActivity = true;
+          }
+      }
 
       return { 
           ...c, 
           balance,
-          hasActivity,
-          transactionsCount: relevantTrans.length
+          hasActivity
       };
     })
     .filter(c => c.name.toLowerCase().includes(search.toLowerCase())) // Filtro Nome
@@ -110,7 +175,7 @@ const Customers = () => {
       <div className="flex gap-2">
         <div className="relative flex-1">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-            <input className="w-full pl-12 pr-4 py-4 bg-white rounded-2xl shadow-sm outline-none text-slate-700" placeholder="Buscar nome..." value={search} onChange={e => setSearch(e.target.value)} />
+            <input className="w-full pl-12 pr-4 py-4 bg-white rounded-2xl shadow-sm outline-none" placeholder="Buscar nome..." value={search} onChange={e => setSearch(e.target.value)} />
         </div>
         <button onClick={() => setIsCreating(true)} className="p-4 bg-yellow-400 text-slate-900 rounded-2xl shadow-sm active:scale-95 transition-all"><UserPlus size={20}/></button>
       </div>
@@ -144,8 +209,12 @@ const Customers = () => {
           )}
 
           {viewMode === 'day' && (
-              <div className="bg-slate-50 p-2 rounded-xl animate-in slide-in-from-top-2">
-                  <input type="date" className="w-full p-3 bg-white rounded-xl font-bold text-slate-700 outline-none border border-slate-100 text-center uppercase text-sm" value={selectedDate} onChange={e => setSelectedDate(e.target.value)} />
+              <div className="flex items-center gap-2 bg-slate-50 p-2 rounded-xl animate-in slide-in-from-top-2 border border-slate-100">
+                  <div className="flex-1">
+                    <input type="date" className="w-full p-3 bg-white rounded-xl font-bold text-slate-700 outline-none text-center uppercase text-sm" value={selectedDate} onChange={e => setSelectedDate(e.target.value)} />
+                  </div>
+                  {/* Botão para limpar data/resetar hoje se quiser, opcional */}
+                  <button onClick={() => setSelectedDate(new Date().toISOString().split('T')[0])} className="p-3 bg-white rounded-xl text-slate-400 active:scale-90"><Calendar size={16}/></button>
               </div>
           )}
 
@@ -187,6 +256,7 @@ const Customers = () => {
             <div className="text-center py-10 text-slate-400">
                 <Users size={48} className="mx-auto mb-2 opacity-50"/>
                 <p className="text-xs font-bold uppercase">Nenhum registro encontrado.</p>
+                {viewMode !== 'all' && <p className="text-[10px] mt-1 text-slate-300">Tente outro período.</p>}
             </div>
         )}
         
@@ -217,7 +287,7 @@ const Customers = () => {
                     ) : (
                         <>
                             <p className="text-base font-black text-green-500 font-mono">0,00</p>
-                            <p className="text-[9px] font-bold text-green-400 uppercase">Quitado</p>
+                            <p className="text-[9px] font-bold text-slate-300 uppercase">Quitado</p>
                         </>
                     )}
                 </div>
