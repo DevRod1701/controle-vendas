@@ -26,7 +26,7 @@ const History = () => {
   const [editingPayment, setEditingPayment] = useState(null);
   const [editForm, setEditForm] = useState({ amount: '', date: '', method: '', description: '', proofs: [] });
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isDeleting, setIsDeleting] = useState(false); // NOVO: Estado de loading para exclusão
+  const [isDeleting, setIsDeleting] = useState(false); 
   
   const [month, setMonth] = useState(new Date().getMonth());
   const [year, setYear] = useState(new Date().getFullYear());
@@ -144,14 +144,12 @@ const History = () => {
       }
   };
 
-  // --- FUNÇÃO DELETAR CORRIGIDA (Race Condition Fix) ---
   const handleDeletePayment = async (payment) => {
-    if (isDeleting) return; // Bloqueia cliques repetidos
+    if (isDeleting) return; 
     setIsDeleting(true);
     setConfirmDelete(null);
 
     try {
-        // 1. Busca o estado ATUAL do pedido no banco (para ter o valor 'paid' mais recente)
         const { data: currentOrder, error: orderError } = await supabase
             .from('orders')
             .select('id, paid')
@@ -160,7 +158,6 @@ const History = () => {
 
         if (orderError) throw orderError;
 
-        // 2. Deleta o pagamento
         const { error: deleteError } = await supabase
             .from('payments')
             .delete()
@@ -168,7 +165,6 @@ const History = () => {
         
         if (deleteError) throw deleteError;
 
-        // 3. Atualiza o saldo do pedido (usando o valor fresco do banco)
         if (currentOrder && payment.status !== 'pending') {
             const newPaid = Math.max(0, Number(currentOrder.paid || 0) - Number(payment.amount));
             const { error: updateError } = await supabase
@@ -298,7 +294,6 @@ const History = () => {
   return (
     <div className="p-6 pb-40 space-y-4 animate-in fade-in text-left font-bold relative">
       
-      {/* LOADING OVERLAY PARA DELEÇÃO */}
       {isDeleting && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[999] flex items-center justify-center animate-in fade-in">
             <div className="bg-white p-6 rounded-2xl shadow-xl flex flex-col items-center gap-3">
@@ -308,7 +303,6 @@ const History = () => {
         </div>
       )}
 
-      {/* MODAL DE ERRO */}
       {errorModal && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[500] flex items-center justify-center p-6 animate-in fade-in">
             <div className="bg-white w-full max-w-xs rounded-[2rem] p-6 shadow-2xl text-center space-y-4">
@@ -319,7 +313,6 @@ const History = () => {
         </div>
       )}
 
-      {/* VISUALIZADOR DE MÚLTIPLAS IMAGENS */}
       {viewImages && (
           <div className="fixed inset-0 bg-black/95 z-[600] flex flex-col items-center justify-center p-4">
               <button onClick={() => setViewImages(null)} className="absolute top-6 right-6 text-white p-2 bg-white/10 rounded-full"><X size={24}/></button>
@@ -500,7 +493,12 @@ const History = () => {
                       <div className="flex items-center justify-between">
                           <div className="flex items-center gap-3">
                               <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${p.status === 'pending' ? 'bg-yellow-50 text-yellow-600' : 'bg-green-50 text-green-600'}`}>{p.status === 'pending' ? <Clock size={20}/> : <CheckCircle2 size={20}/>}</div>
-                              <div><p className="text-[10px] font-black text-slate-400 uppercase leading-none mb-1">{new Date(p.date).toLocaleDateString()} • {p.method}</p><p className="text-sm font-black text-slate-800 font-mono">{formatBRL(p.amount)}</p></div>
+                              <div>
+                                  <p className="text-[10px] font-black text-slate-400 uppercase leading-none mb-1">
+                                      {new Date(p.date).toLocaleDateString()} • {p.method} • {p.order_id ? `pedido #${p.order_id.slice(0,5)}` : ''}
+                                  </p>
+                                  <p className="text-sm font-black text-slate-800 font-mono">{formatBRL(p.amount)}</p>
+                              </div>
                           </div>
                           <div className="flex items-center gap-1">
                               {p.proof && <button onClick={() => handleViewImages(p.proof)} className="p-2 bg-slate-50 text-slate-400 rounded-lg active:scale-90"><ImageIcon size={16}/></button>}
