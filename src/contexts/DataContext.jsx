@@ -12,7 +12,6 @@ export const DataProvider = ({ children }) => {
   const [orders, setOrders] = useState([]);
   const [payments, setPayments] = useState([]);
   
-  // NOVOS ESTADOS
   const [customers, setCustomers] = useState([]);
   const [customerTransactions, setCustomerTransactions] = useState([]);
   
@@ -23,24 +22,34 @@ export const DataProvider = ({ children }) => {
 
     setLoading(true);
     try {
-        // Busca Produtos
+        // Produtos
         const { data: prodData } = await supabase.from('products').select('*').order('name');
         if (prodData) setProducts(prodData);
 
-        // Busca Pedidos (Lógica existente)
-        let orderQuery = supabase.from('orders').select('*, order_items(*)').order('created_at', { ascending: false });
-        const { data: orderData } = await orderQuery;
+        // Pedidos (Limitamos aos últimos 500 para não pesar se tiver muitos)
+        const { data: orderData } = await supabase
+            .from('orders')
+            .select('*, order_items(*)')
+            .order('created_at', { ascending: false })
+            .limit(500); 
         if (orderData) setOrders(orderData);
 
-        // Busca Pagamentos Gerais
-        const { data: payData } = await supabase.from('payments').select('*').order('date', { ascending: false });
+        // Pagamentos - AQUI ESTÁ A CORREÇÃO CRÍTICA
+        // NÃO selecionamos a coluna 'proof'. Selecionamos 'has_proof'.
+        // Isso reduz o tamanho do download de MBs para KBs.
+        const { data: payData } = await supabase
+            .from('payments')
+            .select('id, amount, date, method, description, status, order_id, approver_name, has_proof') 
+            .order('date', { ascending: false })
+            .limit(500);
         if (payData) setPayments(payData);
 
-        // --- NOVO: BUSCA CLIENTES E TRANSAÇÕES DO VENDEDOR ---
+        // Clientes
         const { data: custData } = await supabase.from('customers').select('*').order('name');
         if (custData) setCustomers(custData);
 
-        const { data: transData } = await supabase.from('customer_transactions').select('*').order('date', { ascending: false });
+        // Transações
+        const { data: transData } = await supabase.from('customer_transactions').select('*').order('date', { ascending: false }).limit(500);
         if (transData) setCustomerTransactions(transData);
 
     } catch (error) {
@@ -59,8 +68,8 @@ export const DataProvider = ({ children }) => {
         products, 
         orders, 
         payments, 
-        customers, // Exportando
-        customerTransactions, // Exportando
+        customers, 
+        customerTransactions, 
         refreshData, 
         loading 
     }}>
