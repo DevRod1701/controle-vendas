@@ -3,6 +3,8 @@ import { X, Upload, Loader2, CheckSquare, Square, AlertTriangle, Calendar, List,
 import { formatBRL } from '../../utils/formatters';
 import { supabase } from '../../services/supabase';
 import AlertModal from './AlertModal';
+import imageCompression from 'browser-image-compression'; // Importa Compressão
+import { uploadToR2 } from '../../services/r2';          // Importa Upload R2
 
 const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
   // Filtra apenas pedidos VÁLIDOS para pagamento
@@ -42,7 +44,8 @@ const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
   });
   const [proofFile, setProofFile] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [alertInfo, setAlertInfo] = useState(null); // Estado para o Modal de Alerta
+  const [isUploading, setIsUploading] = useState(false); // NOVO: Estado de upload
+  const [alertInfo, setAlertInfo] = useState(null);
 
   const selectedDebtTotal = useMemo(() => {
     return unpaidOrders
@@ -76,31 +79,52 @@ const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
     );
   };
 
-  const handleFileChange = (e) => {
+  // --- NOVA FUNÇÃO DE UPLOAD (R2 + Compressão) ---
+  const handleFileChange = async (e) => {
     const files = Array.from(e.target.files);
-    if (selectionMode === 'month') {
-        files.forEach(file => {
-            const reader = new FileReader();
-            reader.onloadend = () => {
-                setPaymentData(prev => ({
-                    ...prev,
-                    proofs: [...prev.proofs, reader.result] 
-                }));
-            };
-            reader.readAsDataURL(file);
-        });
-    } else {
-        const file = files[0];
-        if (file) {
-            const reader = new FileReader();
-            reader.onloadend = () => {
-                setPaymentData(prev => ({ ...prev, proof: reader.result }));
-                setProofFile(file.name);
-            };
-            reader.readAsDataURL(file);
+    if (files.length === 0) return;
+
+    setIsUploading(true);
+
+    // Opções de compressão
+    const options = {
+        maxSizeMB: 1,
+        maxWidthOrHeight: 1920,
+        useWebWorker: true
+    };
+
+    for (const file of files) {
+        try {
+            // 1. Comprime
+            let fileToUpload = file;
+            try {
+                fileToUpload = await imageCompression(file, options);
+            } catch (err) {
+                console.warn("Falha na compressão, enviando original.", err);
+            }
+
+            // 2. Envia para R2
+            const publicUrl = await uploadToR2(fileToUpload);
+
+            if (publicUrl) {
+                if (selectionMode === 'month') {
+                    setPaymentData(prev => ({
+                        ...prev,
+                        proofs: [...prev.proofs, publicUrl] 
+                    }));
+                } else {
+                    setPaymentData(prev => ({ ...prev, proof: publicUrl }));
+                    setProofFile(file.name);
+                }
+            }
+        } catch (error) {
+            console.error("Erro no upload:", error);
+            setAlertInfo({ type: 'error', title: 'Erro', message: 'Falha ao enviar imagem.' });
         }
     }
+    setIsUploading(false);
   };
+  // ------------------------------------------------
 
   const removeProof = (index) => {
     setPaymentData(prev => ({
@@ -110,7 +134,7 @@ const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
   };
 
   const handleConfirm = async () => {
-    if (isSubmitting) return;
+    if (isSubmitting || isUploading) return; // Bloqueia se estiver subindo imagem
     if (!paymentData.amount || Number(paymentData.amount) <= 0) return;
     
     if (selectedIds.length === 0) {
@@ -120,7 +144,6 @@ const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
 
     const amountToPay = parseFloat(paymentData.amount);
 
-    // --- NOVA VALIDAÇÃO: Impede valor maior que o total selecionado ---
     if (amountToPay > selectedDebtTotal + 0.01) {
         setAlertInfo({ 
             type: 'error', 
@@ -129,7 +152,6 @@ const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
         });
         return;
     }
-    // ----------------------------------------------------------------
     
     setIsSubmitting(true);
     const isCash = paymentData.method === 'Dinheiro';
@@ -151,23 +173,27 @@ const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
             ? (paymentData.proofs.length > 1 ? JSON.stringify(paymentData.proofs) : (paymentData.proofs[0] || ''))
             : paymentData.proof;
 
+        // Loop para inserir pagamentos (Lógica inalterada)
+        const updates = [];
         for (const order of targetOrders) {
             if (remaining <= 0.01) break;
             const currentDebt = Number(order.total) - Number(order.paid || 0);
             const payAmount = Math.min(remaining, currentDebt);
 
             if (payAmount > 0.01) {
+                // Insere Pagamento
                 const { error: payError } = await supabase.from('payments').insert([{
                     order_id: order.id,
                     amount: payAmount,
                     date: paymentData.date,
                     method: paymentData.method,
-                    proof: finalProof, 
+                    proof: finalProof, // Agora é uma URL leve do R2!
                     description: finalDescription,
                     status: status
                 }]);
                 if (payError) throw payError;
                 
+                // Atualiza Pedido
                 if (!isCash) {
                     const newPaid = Number(order.paid || 0) + payAmount;
                     await supabase.from('orders').update({ paid: newPaid }).eq('id', order.id);
@@ -197,7 +223,6 @@ const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
   return (
     <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-sm z-[350] flex items-center justify-center p-4 animate-in fade-in font-bold overflow-y-auto">
       
-      {/* Componente de Alerta Integrado */}
       <AlertModal 
         isOpen={!!alertInfo} 
         type={alertInfo?.type} 
@@ -208,7 +233,6 @@ const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
 
       <div className="bg-white w-full max-w-md rounded-[2.5rem] p-6 shadow-2xl animate-in slide-in-from-bottom-10 space-y-4 my-auto">
         
-        {/* Cabeçalho */}
         <div className="flex justify-between items-center">
           <div>
             <h3 className="text-xl font-black text-slate-800 uppercase leading-none">Pagar Saldo</h3>
@@ -217,13 +241,11 @@ const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
           <button onClick={onClose} className="p-2 bg-slate-100 rounded-full active:scale-90 transition-transform"><X size={20}/></button>
         </div>
 
-        {/* Seleção de Modo */}
         <div className="flex bg-slate-100 p-1 rounded-2xl">
             <button onClick={() => setSelectionMode('manual')} className={`flex-1 py-2 rounded-xl text-[10px] font-bold uppercase flex items-center justify-center gap-2 transition-all ${selectionMode === 'manual' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-400'}`}><List size={14}/> Pedidos</button>
             <button onClick={() => setSelectionMode('month')} className={`flex-1 py-2 rounded-xl text-[10px] font-bold uppercase flex items-center justify-center gap-2 transition-all ${selectionMode === 'month' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-400'}`}><Calendar size={14}/> Por Mês</button>
         </div>
 
-        {/* Conteúdo da Modal */}
         <div className="space-y-4">
             {selectionMode === 'month' && (
                 <div className="animate-in slide-in-from-top-2">
@@ -300,10 +322,10 @@ const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
                             </div>
                         )}
 
-                        <label className="w-full py-3 flex items-center justify-center gap-2 cursor-pointer text-slate-400 font-bold text-xs">
-                            <Upload size={14}/> 
-                            {selectionMode === 'month' ? "Adicionar Imagens" : (proofFile ? "Imagem Selecionada" : "Anexar")} 
-                            <input type="file" className="hidden" accept="image/*" multiple={selectionMode === 'month'} onChange={handleFileChange} />
+                        <label className={`w-full py-3 flex items-center justify-center gap-2 cursor-pointer text-slate-400 font-bold text-xs ${isUploading ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                            {isUploading ? <Loader2 className="animate-spin" size={14}/> : <Upload size={14}/>} 
+                            {isUploading ? "Enviando..." : (selectionMode === 'month' ? "Adicionar Imagens" : (proofFile ? "Imagem Selecionada" : "Anexar"))} 
+                            <input type="file" className="hidden" accept="image/*" multiple={selectionMode === 'month'} onChange={handleFileChange} disabled={isUploading}/>
                         </label>
                     </div>
                 </div>
@@ -322,9 +344,8 @@ const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
             </div>
         </div>
 
-        {/* Botão de Ação */}
         <div className="pt-2">
-            <button onClick={handleConfirm} disabled={isSubmitting} className="w-full py-4 bg-green-500 text-white rounded-2xl font-bold uppercase shadow-lg disabled:opacity-50 flex items-center justify-center gap-2 active:scale-95 transition-transform">
+            <button onClick={handleConfirm} disabled={isSubmitting || isUploading} className="w-full py-4 bg-green-500 text-white rounded-2xl font-bold uppercase shadow-lg disabled:opacity-50 flex items-center justify-center gap-2 active:scale-95 transition-transform">
                 {isSubmitting ? <Loader2 className="animate-spin" size={20} /> : "Confirmar Pagamento"}
             </button>
         </div>

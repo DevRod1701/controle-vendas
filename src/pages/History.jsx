@@ -7,6 +7,8 @@ import { supabase } from '../services/supabase';
 import { formatBRL } from '../utils/formatters';
 import OrderDetail from '../components/OrderDetail';
 import ConfirmModal from '../components/modals/ConfirmModal';
+import { uploadToR2 } from '../services/r2';
+import imageCompression from 'browser-image-compression'; // <--- IMPORTADO
 
 const History = () => {
   const { orders, payments, refreshData } = useData();
@@ -23,7 +25,7 @@ const History = () => {
   // Estados para visualização de imagem
   const [viewImages, setViewImages] = useState(null); 
   const [currentImgIdx, setCurrentImgIdx] = useState(0);
-  const [isLoadingImage, setIsLoadingImage] = useState(false); // NOVO: Loading ao buscar imagem
+  const [isLoadingImage, setIsLoadingImage] = useState(false);
   
   const [editingPayment, setEditingPayment] = useState(null);
   const [editForm, setEditForm] = useState({ amount: '', date: '', method: '', description: '', proofs: [] });
@@ -74,15 +76,12 @@ const History = () => {
     paymentsInMonth.forEach(p => {
         if (processedIds.has(p.id)) return;
 
-        // IMPORTANTE: Como 'proof' não vem mais no contexto, a verificação 'other.proof === p.proof' 
-        // agora compara undefined === undefined. Isso é aceitável, pois assumimos que pagamentos em lote
-        // idênticos em data/método/descrição pertencem ao mesmo grupo.
         const group = paymentsInMonth.filter(other => 
             !processedIds.has(other.id) &&
             other.date === p.date &&
             other.method === p.method &&
             other.description === p.description &&
-            other.has_proof === p.has_proof // Usamos has_proof para garantir consistência
+            other.has_proof === p.has_proof
         );
 
         if (group.length > 1) {
@@ -95,7 +94,7 @@ const History = () => {
                 date: p.date,
                 method: p.method,
                 description: p.description,
-                has_proof: p.has_proof, // Mantém a flag visual
+                has_proof: p.has_proof,
                 status: group.every(item => item.status === 'approved') ? 'approved' : 'pending'
             });
             group.forEach(item => processedIds.add(item.id));
@@ -132,13 +131,11 @@ const History = () => {
     );
   };
 
-  // --- NOVA FUNÇÃO: BUSCA IMAGEM SOB DEMANDA ---
   const handleViewImages = async (paymentId) => {
       if (isLoadingImage) return;
       setIsLoadingImage(true);
 
       try {
-          // Busca APENAS a coluna proof deste ID específico
           const { data, error } = await supabase
             .from('payments')
             .select('proof')
@@ -212,24 +209,51 @@ const History = () => {
     }
   };
 
-  const handleFileChange = (e) => {
+  // --- FUNÇÃO DE UPLOAD OTIMIZADA ---
+  const handleFileChange = async (e) => {
     const files = Array.from(e.target.files);
-    files.forEach(file => {
-        const reader = new FileReader();
-        reader.onloadend = () => { 
-            setEditForm(prev => ({ ...prev, proofs: [...prev.proofs, reader.result] }));
-        };
-        reader.readAsDataURL(file);
-    });
+    
+    // Feedback visual
+    const btn = e.target.parentElement;
+    const originalText = btn.innerHTML;
+    btn.innerText = "Comprimindo..."; // Primeiro comprime
+
+    const compressionOptions = {
+      maxSizeMB: 1,              // Máximo 1MB
+      maxWidthOrHeight: 1920,    // Redimensiona se for 4k
+      useWebWorker: true
+    };
+
+    for (const file of files) {
+        try {
+            // 1. Comprime
+            let fileToUpload = file;
+            try {
+                fileToUpload = await imageCompression(file, compressionOptions);
+            } catch (err) {
+                console.warn("Erro ao comprimir, usando original:", err);
+            }
+
+            // 2. Envia
+            btn.innerText = "Enviando..."; // Depois envia
+            const publicUrl = await uploadToR2(fileToUpload);
+
+            if (publicUrl) {
+                setEditForm(prev => ({ ...prev, proofs: [...prev.proofs, publicUrl] }));
+            }
+        } catch (error) {
+            console.error("Erro no processo de imagem:", error);
+        }
+    }
+    // Restaura o botão
+    btn.innerHTML = originalText;
   };
 
   const removeProof = (index) => {
     setEditForm(prev => ({ ...prev, proofs: prev.proofs.filter((_, i) => i !== index) }));
   };
 
-  // --- NOVA FUNÇÃO: PREPARA EDIÇÃO COM FETCH ---
   const startEditingPayment = async (payment) => {
-      // Se não tiver comprovante, abre direto
       if (!payment.has_proof) {
           setEditingPayment(payment);
           setEditForm({
@@ -242,7 +266,6 @@ const History = () => {
           return;
       }
 
-      // Se tiver comprovante, precisamos buscar do banco antes de abrir o modal
       setIsLoadingImage(true);
       try {
           const { data } = await supabase.from('payments').select('proof').eq('id', payment.id).single();
@@ -346,7 +369,6 @@ const History = () => {
   return (
     <div className="p-6 pb-40 space-y-4 animate-in fade-in text-left font-bold relative">
       
-      {/* LOADING OVERLAYS */}
       {(isDeleting || isLoadingImage) && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[999] flex items-center justify-center animate-in fade-in">
             <div className="bg-white p-6 rounded-2xl shadow-xl flex flex-col items-center gap-3">
@@ -513,7 +535,6 @@ const History = () => {
                                       </div>
                                   </div>
                                   <div className="flex items-center gap-1">
-                                      {/* USE has_proof PARA MOSTRAR BOTÃO */}
                                       {p.has_proof && <button onClick={(e) => { e.stopPropagation(); handleViewImages(p.items[0].id); }} className="p-2 bg-slate-50 text-slate-400 rounded-lg active:scale-90"><ImageIcon size={16}/></button>}
                                       <div className="p-2 bg-slate-50 text-slate-400 rounded-lg">{isExpanded ? <ChevronUp size={16}/> : <ChevronDown size={16}/>}</div>
                                   </div>
@@ -551,13 +572,17 @@ const History = () => {
                               <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${p.status === 'pending' ? 'bg-yellow-50 text-yellow-600' : 'bg-green-50 text-green-600'}`}>{p.status === 'pending' ? <Clock size={20}/> : <CheckCircle2 size={20}/>}</div>
                               <div>
                                   <p className="text-[10px] font-black text-slate-400 uppercase leading-none mb-1">
-                                      {new Date(p.date).toLocaleDateString()} • {p.method} • {p.order_id ? `#${p.order_id.slice(0,5)}` : ''}
+                                      {new Date(p.date).toLocaleDateString()} • {p.method}
                                   </p>
+                                  {p.order_id && (
+                                      <p className="text-[10px] font-black text-indigo-400 uppercase leading-none mb-1">
+                                          Pedido #{p.order_id.slice(0,5)}
+                                      </p>
+                                  )}
                                   <p className="text-sm font-black text-slate-800 font-mono">{formatBRL(p.amount)}</p>
                               </div>
                           </div>
                           <div className="flex items-center gap-1">
-                              {/* USE has_proof PARA MOSTRAR BOTÃO */}
                               {p.has_proof && <button onClick={() => handleViewImages(p.id)} className="p-2 bg-slate-50 text-slate-400 rounded-lg active:scale-90"><ImageIcon size={16}/></button>}
                               {isOwner && (
                                   <><button onClick={() => startEditingPayment(p)} className="p-2 bg-slate-50 text-indigo-400 rounded-lg active:scale-90"><Edit2 size={16}/></button><button onClick={() => setConfirmDelete(p)} className="p-2 bg-red-50 text-red-400 rounded-lg active:scale-90"><Trash2 size={16}/></button></>

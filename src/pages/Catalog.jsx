@@ -5,7 +5,7 @@ import { useData } from '../contexts/DataContext';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../services/supabase';
 import { formatBRL } from '../utils/formatters';
-import AlertModal from '../components/modals/AlertModal'; // IMPORTADO
+import AlertModal from '../components/modals/AlertModal';
 
 const Catalog = () => {
   const { products, refreshData } = useData();
@@ -17,10 +17,29 @@ const Catalog = () => {
   const [showCart, setShowCart] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   
-  // ESTADO DO ALERTA
   const [alertInfo, setAlertInfo] = useState(null); 
   
-  const updateCart = (id, delta) => setCart(prev => ({ ...prev, [id]: Math.max(0, (prev[id] || 0) + delta) }));
+  // Função para garantir que não adicione mais do que o estoque (Opcional, mas recomendado)
+  const updateCart = (id, delta) => {
+    setCart(prev => {
+        const currentQty = prev[id] || 0;
+        const product = products.find(p => String(p.id) === String(id));
+        const maxStock = product?.stock || 0;
+        
+        const newQty = currentQty + delta;
+
+        // Impede ficar negativo
+        if (newQty < 0) return { ...prev, [id]: 0 };
+        
+        // (Opcional) Impede adicionar mais que o estoque disponível
+        if (newQty > maxStock) {
+            // Você pode colocar um alerta aqui se quiser
+            return prev; 
+        }
+
+        return { ...prev, [id]: newQty };
+    });
+  };
   
   const count = useMemo(() => Object.values(cart).reduce((a, b) => a + b, 0), [cart]);
   
@@ -29,7 +48,14 @@ const Catalog = () => {
     return acc + (Number(p?.price || 0) * q);
   }, 0), [cart, products]);
 
-  const filtered = products.filter(p => p.name.toLowerCase().includes(search.toLowerCase()));
+  // --- ALTERAÇÃO AQUI ---
+  // Filtra produtos pelo nome E garante que o estoque seja maior que 0
+  const filtered = useMemo(() => {
+      return products
+        .filter(p => (p.stock || 0) > 0) // <--- Oculta estoque 0 ou nulo
+        .filter(p => p.name.toLowerCase().includes(search.toLowerCase()));
+  }, [products, search]);
+  // ----------------------
 
   const submitOrder = async () => {
     if (isSubmitting) return;
@@ -61,7 +87,10 @@ const Catalog = () => {
         }));
         await supabase.from('order_items').insert(items);
         
-        // SUCESSO: Mostra modal e redireciona depois
+        // --- ATUALIZAR ESTOQUE (Sugestão) ---
+        // Se você quiser abater do estoque automaticamente ao vender, 
+        // precisaria fazer um update no banco aqui ou usar uma RPC do Supabase.
+        
         setAlertInfo({ type: 'success', title: 'Sucesso', message: 'Pedido enviado para o admin!' });
         
         setTimeout(() => {
@@ -77,13 +106,12 @@ const Catalog = () => {
       }
     } catch (e) {
       setAlertInfo({ type: 'error', title: 'Erro', message: 'Falha ao enviar o pedido.' });
-      setIsSubmitting(false); // Libera apenas se der erro
+      setIsSubmitting(false); 
     } 
   };
 
   return (
     <div className="p-6 pb-40 space-y-4 animate-in fade-in leading-none font-bold">
-      {/* RENDERIZA O MODAL SE HOUVER */}
       <AlertModal 
         isOpen={!!alertInfo} 
         type={alertInfo?.type} 
@@ -108,11 +136,21 @@ const Catalog = () => {
       </div>
 
       <div className="grid grid-cols-1 gap-3 pb-24">
+        {filtered.length === 0 && (
+            <div className="text-center py-10 text-slate-400">
+                <p>Nenhum produto disponível.</p>
+            </div>
+        )}
+
         {filtered.map(p => (
           <div key={p.id} className="bg-white p-5 rounded-[2.2rem] border-2 border-slate-50 flex justify-between items-center shadow-sm text-left">
             <div>
                 <p className="font-black text-slate-800 leading-tight">{p.name}</p>
-                <p className="text-indigo-600 font-black text-sm uppercase tracking-widest font-mono mt-1 leading-none">{formatBRL(p.price)}</p>
+                <div className="flex gap-2 mt-1">
+                    <p className="text-indigo-600 font-black text-sm uppercase tracking-widest font-mono leading-none">{formatBRL(p.price)}</p>
+                    {/* Mostra estoque restante (Opcional) */}
+                    <p className="text-[10px] text-slate-400 font-bold bg-slate-100 px-2 rounded-md leading-none flex items-center">Restam: {p.stock}</p>
+                </div>
             </div>
             <div className="flex items-center gap-3 bg-slate-50 p-2 rounded-[1.5rem] border border-slate-100">
               <button onClick={() => updateCart(p.id, -1)} className="w-10 h-10 bg-white rounded-xl shadow-sm font-black text-xl active:scale-90 transition-all">-</button>
@@ -124,14 +162,12 @@ const Catalog = () => {
       </div>
 
       {count > 0 && !showCart && (
-        // Ajustei left-4 right-4 (mais largura) e p-4 (menos altura)
         <div className="fixed bottom-6 left-4 right-4 bg-slate-900 text-white p-4 rounded-[2rem] flex justify-between items-center shadow-2xl border-b-4 border-yellow-400 animate-in slide-in-from-bottom-12 z-50">
           <div className="text-left leading-none pl-2">
               <p className="text-[9px] text-slate-400 uppercase font-black tracking-widest mb-1">{count} itens</p>
               <p className="text-xl font-black text-yellow-400 font-mono tracking-tighter leading-none">{formatBRL(total)}</p>
           </div>
           
-          {/* Botão mais compacto: px-6 py-3 em vez de px-8 py-4 */}
           <button 
             onClick={() => setShowCart(true)} 
             className="bg-white text-slate-900 px-6 py-3 rounded-[1.2rem] font-black text-xs uppercase active:scale-95 transition-all shadow-lg flex items-center gap-2"

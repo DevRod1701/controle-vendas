@@ -6,8 +6,6 @@ import {
 import { useData } from '../../contexts/DataContext';
 import { formatBRL } from '../../utils/formatters';
 import { executePrint } from '../../utils/printHandler';
-
-// IMPORTANTE: Certifique-se que o reportTemplate.js está nesta pasta (igual ao orderDetailTemplate)
 import { reportTemplate } from '../../utils/print/reportTemplate'; 
 
 const Reports = () => {
@@ -15,36 +13,31 @@ const Reports = () => {
   const { orders, payments } = useData();
 
   // Estados dos Filtros
-  const [dateMode, setDateMode] = useState('month'); // 'month' | 'custom'
-  
-  // Controle do Mês Customizado (Visual)
+  const [dateMode, setDateMode] = useState('month'); 
   const now = new Date();
   const [viewYear, setViewYear] = useState(now.getFullYear());
-  const [selectedMonthStr, setSelectedMonthStr] = useState(new Date().toISOString().slice(0, 7)); // YYYY-MM
-  const [showMonthPicker, setShowMonthPicker] = useState(false); // Toggle do menu de meses
+  const [selectedMonthStr, setSelectedMonthStr] = useState(new Date().toISOString().slice(0, 7)); 
+  const [showMonthPicker, setShowMonthPicker] = useState(false); 
 
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
   
-  // Controle de Vendedor (Busca)
   const [selectedSeller, setSelectedSeller] = useState('all');
   const [sellerSearch, setSellerSearch] = useState('');
   const [showSellerDropdown, setShowSellerDropdown] = useState(false);
 
-  // Tipo de Relatório e Visualização
   const [reportType, setReportType] = useState('full'); 
-  const [expandRanking, setExpandRanking] = useState(false); // Toggle do Ranking
+  const [expandRanking, setExpandRanking] = useState(false); 
 
-  // --- FUNÇÕES AUXILIARES ---
   const monthsList = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
 
   const handleSelectMonth = (monthIndex) => {
     const m = String(monthIndex + 1).padStart(2, '0');
     setSelectedMonthStr(`${viewYear}-${m}`);
-    setShowMonthPicker(false); // Fecha ao selecionar
+    setShowMonthPicker(false); 
   };
 
-  // --- LÓGICA DE FILTRAGEM ---
+  // --- 1. FILTRAGEM BÁSICA (Por Data e Vendedor) ---
   const filteredData = useMemo(() => {
     let start, end;
     if (dateMode === 'month') {
@@ -65,7 +58,7 @@ const Reports = () => {
         return matchDate && matchSeller && matchStatus;
     });
 
-    // Filtra Pagamentos
+    // Filtra Pagamentos (Brutos)
     const filteredPayments = payments.filter(p => {
         const originalOrder = orders.find(o => o.id === p.order_id);
         const referenceDate = originalOrder ? new Date(originalOrder.created_at) : new Date(p.date + 'T12:00:00');
@@ -77,15 +70,61 @@ const Reports = () => {
     return { orders: filteredOrders, payments: filteredPayments, startDate: start, endDate: end };
   }, [orders, payments, selectedMonthStr, customStart, customEnd, dateMode, selectedSeller]);
 
+  // --- 2. LÓGICA DE AGRUPAMENTO (IGUAL AO HISTORY.JSX) ---
+  const groupedPayments = useMemo(() => {
+      const rawPayments = filteredData.payments;
+      // Ordena por data decrescente (igual ao History)
+      const sortedPayments = [...rawPayments].sort((a, b) => new Date(b.date) - new Date(a.date));
+      
+      const processedIds = new Set();
+      const result = [];
+
+      sortedPayments.forEach(p => {
+          if (processedIds.has(p.id)) return;
+
+          // Mesma lógica do History: Agrupa se data, método, descrição e status de prova forem iguais
+          const group = sortedPayments.filter(other => 
+              !processedIds.has(other.id) &&
+              other.date === p.date &&
+              other.method === p.method &&
+              other.description === p.description &&
+              other.has_proof === p.has_proof 
+          );
+
+          if (group.length > 1) {
+              const totalAmount = group.reduce((acc, item) => acc + Number(item.amount), 0);
+              result.push({
+                  id: `group-${p.id}`,
+                  isGroup: true,
+                  items: group,
+                  amount: totalAmount,
+                  date: p.date,
+                  method: p.method,
+                  description: p.description,
+                  has_proof: p.has_proof
+              });
+              group.forEach(item => processedIds.add(item.id));
+          } else {
+              result.push({ ...p, isGroup: false });
+              processedIds.add(p.id);
+          }
+      });
+
+      return result;
+  }, [filteredData.payments]);
+
   // --- ESTATÍSTICAS ---
   const stats = useMemo(() => {
     const totalSales = filteredData.orders.reduce((acc, o) => acc + (o.type === 'sale' ? Number(o.total) : 0), 0);
     const totalReturnsValue = filteredData.orders.reduce((acc, o) => acc + (o.type === 'return' ? Number(o.total) : 0), 0);
-    const totalReceived = filteredData.payments.reduce((acc, p) => acc + Number(p.amount), 0);
+    
+    // Total Recebido: Soma dos agrupados (deve dar o mesmo valor dos individuais, mas é mais seguro usar o agrupado para consistência visual)
+    const totalReceived = groupedPayments.reduce((acc, p) => acc + Number(p.amount), 0);
+    
     const netSales = totalSales; 
     const commission = netSales * 0.20;
 
-    // Análise de Produtos
+    // Ranking
     const productMap = {};
     filteredData.orders.forEach(o => {
         if (o.type === 'sale') {
@@ -101,17 +140,10 @@ const Reports = () => {
         .map(([name, data]) => ({ name, ...data }))
         .sort((a, b) => b.qty - a.qty);
 
-    return {
-        totalSales,
-        totalReturnsValue,
-        netSales,
-        totalReceived,
-        commission,
-        ranking: rankedProducts
-    };
-  }, [filteredData]);
+    return { totalSales, totalReturnsValue, netSales, totalReceived, commission, ranking: rankedProducts };
+  }, [filteredData.orders, groupedPayments]);
 
-  // Lista de Vendedores
+  // Listas auxiliares
   const sellersList = useMemo(() => {
     const unique = new Set();
     const list = [];
@@ -127,45 +159,40 @@ const Reports = () => {
   const filteredSellers = sellersList.filter(s => s.name.toLowerCase().includes(sellerSearch.toLowerCase()));
   const currentSellerName = selectedSeller === 'all' ? 'Todos os Vendedores' : sellersList.find(s => s.id === selectedSeller)?.name || 'Vendedor';
 
-  
-  // --- FUNÇÃO DE IMPRESSÃO TÉRMICA (ATUALIZADA) ---
+  // --- IMPRESSÃO TÉRMICA (USA OS AGRUPADOS) ---
   const generateThermalReport = () => {
     const periodStr = dateMode === 'month' 
         ? `${monthsList[Number(selectedMonthStr.split('-')[1])-1]}/${selectedMonthStr.split('-')[0]}` 
         : `${new Date(customStart).toLocaleDateString()} a ${new Date(customEnd).toLocaleDateString()}`;
 
-    // 1. PREPARAÇÃO DOS PEDIDOS
     const ordersFormatted = filteredData.orders.map(o => ({
         date: new Date(o.created_at).toLocaleDateString(),
         desc: `#${o.id.slice(0,4)}`,
         value: `${o.type === 'return' ? '-' : ''}${formatBRL(o.total)}`
     }));
 
-    // 2. PREPARAÇÃO DOS PAGAMENTOS
-    const paymentsFormatted = filteredData.payments.map(p => ({
+    // Usa 'groupedPayments' para o relatório impresso
+    const paymentsFormatted = groupedPayments.map(p => ({
         date: new Date(p.date).toLocaleDateString(),
-        desc: p.method, // Ex: "Pix", "Dinheiro"
+        desc: p.isGroup ? `${p.method} (Lote)` : p.method, // Mostra "(Lote)" se for agrupado
         value: formatBRL(p.amount)
     }));
 
-    // 3. TOTAIS
     const templateStats = {
         netSales: formatBRL(stats.netSales),
         commission: formatBRL(stats.commission),
         totalReceived: formatBRL(stats.totalReceived)
     };
 
-    // 4. GERA O HTML (Passando listas separadas)
     const htmlContent = reportTemplate({
         periodStr,
         currentSellerName,
         stats: templateStats,
-        orders: ordersFormatted,      // Lista separada de pedidos
-        payments: paymentsFormatted,  // Lista separada de pagamentos
+        orders: ordersFormatted,      
+        payments: paymentsFormatted, 
         reportType: reportType
     });
 
-    // 5. IMPRIME
     executePrint(htmlContent);
   };
 
@@ -391,27 +418,24 @@ const Reports = () => {
             </div>
         ))}
 
-        {/* LISTA DE PAGAMENTOS */}
-        {(reportType !== 'orders') && filteredData.payments.map(p => {
-             const originalOrder = orders.find(o => o.id === p.order_id);
-             const refDate = originalOrder ? new Date(originalOrder.created_at) : new Date(p.date + 'T12:00:00');
-
-            return (
-            <div key={p.id} className="bg-white p-4 rounded-[1.5rem] border border-green-50 flex justify-between items-center text-xs shadow-sm">
+        {/* LISTA DE PAGAMENTOS (USANDO GROUPED PAYMENTS AGORA) */}
+        {(reportType !== 'orders') && groupedPayments.map((p, idx) => (
+            <div key={p.id || idx} className="bg-white p-4 rounded-[1.5rem] border border-green-50 flex justify-between items-center text-xs shadow-sm">
                 <div>
                     <p className="font-black text-green-800">{new Date(p.date).toLocaleDateString()} - Pagamento</p>
-                    <p className="text-green-600 font-bold mt-0.5">{p.method} {p.description ? `(${p.description})` : ''}</p>
-                    {originalOrder && (
-                        <p className="text-[9px] text-slate-400 mt-1">Ref. Pedido: {refDate.toLocaleDateString()}</p>
-                    )}
+                    <p className="text-green-600 font-bold mt-0.5">
+                        {p.method} 
+                        {p.isGroup ? ' (Lote Agrupado)' : ''} 
+                        {p.description ? ` - ${p.description}` : ''}
+                    </p>
                 </div>
                 <p className="font-mono font-black text-green-600">
                     {formatBRL(p.amount)}
                 </p>
             </div>
-        )})}
+        ))}
 
-        {(filteredData.orders.length === 0 && filteredData.payments.length === 0) && (
+        {(filteredData.orders.length === 0 && groupedPayments.length === 0) && (
             <p className="text-center text-slate-400 text-xs py-8">Nada encontrado.</p>
         )}
       </div>
