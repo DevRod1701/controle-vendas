@@ -149,7 +149,7 @@ const Catalog = () => {
                 <div className="flex gap-2 mt-1">
                     <p className="text-indigo-600 font-black text-sm uppercase tracking-widest font-mono leading-none">{formatBRL(p.price)}</p>
                     {/* Mostra estoque restante (Opcional) */}
-                    <p className="text-[10px] text-slate-400 font-bold bg-slate-100 px-2 rounded-md leading-none flex items-center">Restam: {p.stock}</p>
+                    {/* <p className="text-[10px] text-slate-400 font-bold bg-slate-100 px-2 rounded-md leading-none flex items-center">Restam: {p.stock}</p> */}
                 </div>
             </div>
             <div className="flex items-center gap-3 bg-slate-50 p-2 rounded-[1.5rem] border border-slate-100">
