@@ -1,13 +1,12 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { X, Upload, Loader2, CheckSquare, Square, AlertTriangle, Calendar, List, ImageIcon } from 'lucide-react';
+import { X, Upload, Loader2, CheckSquare, Square, AlertTriangle, Calendar, List, ImageIcon, Check } from 'lucide-react';
 import { formatBRL } from '../../utils/formatters';
 import { supabase } from '../../services/supabase';
 import AlertModal from './AlertModal';
-import imageCompression from 'browser-image-compression'; // Importa Compressão
-import { uploadToR2 } from '../../services/r2';          // Importa Upload R2
+import imageCompression from 'browser-image-compression';
+import { uploadToR2 } from '../../services/r2';
 
 const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
-  // Filtra apenas pedidos VÁLIDOS para pagamento
   const unpaidOrders = useMemo(() => {
     return orders
       .filter(o => 
@@ -44,8 +43,11 @@ const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
   });
   const [proofFile, setProofFile] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isUploading, setIsUploading] = useState(false); // NOVO: Estado de upload
+  const [isUploading, setIsUploading] = useState(false);
   const [alertInfo, setAlertInfo] = useState(null);
+  
+  // NOVO ESTADO: Controla o modal de confirmação
+  const [isConfirming, setIsConfirming] = useState(false);
 
   const selectedDebtTotal = useMemo(() => {
     return unpaidOrders
@@ -79,14 +81,12 @@ const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
     );
   };
 
-  // --- NOVA FUNÇÃO DE UPLOAD (R2 + Compressão) ---
   const handleFileChange = async (e) => {
     const files = Array.from(e.target.files);
     if (files.length === 0) return;
 
     setIsUploading(true);
 
-    // Opções de compressão
     const options = {
         maxSizeMB: 1,
         maxWidthOrHeight: 1920,
@@ -95,7 +95,6 @@ const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
 
     for (const file of files) {
         try {
-            // 1. Comprime
             let fileToUpload = file;
             try {
                 fileToUpload = await imageCompression(file, options);
@@ -103,7 +102,6 @@ const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
                 console.warn("Falha na compressão, enviando original.", err);
             }
 
-            // 2. Envia para R2
             const publicUrl = await uploadToR2(fileToUpload);
 
             if (publicUrl) {
@@ -124,7 +122,6 @@ const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
     }
     setIsUploading(false);
   };
-  // ------------------------------------------------
 
   const removeProof = (index) => {
     setPaymentData(prev => ({
@@ -133,8 +130,9 @@ const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
     }));
   };
 
-  const handleConfirm = async () => {
-    if (isSubmitting || isUploading) return; // Bloqueia se estiver subindo imagem
+  // NOVA FUNÇÃO: Valida os dados e abre o modal de confirmação
+  const triggerConfirm = () => {
+    if (isSubmitting || isUploading) return;
     if (!paymentData.amount || Number(paymentData.amount) <= 0) return;
     
     if (selectedIds.length === 0) {
@@ -152,8 +150,15 @@ const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
         });
         return;
     }
-    
+
+    // Se passou nas validações, abre o modal de confirmação
+    setIsConfirming(true);
+  };
+
+  // FUNÇÃO ORIGINAL: Apenas executa o pagamento no banco
+  const handleConfirm = async () => {
     setIsSubmitting(true);
+    const amountToPay = parseFloat(paymentData.amount);
     const isCash = paymentData.method === 'Dinheiro';
     const status = isCash ? 'pending' : 'approved';
 
@@ -173,7 +178,6 @@ const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
             ? (paymentData.proofs.length > 1 ? JSON.stringify(paymentData.proofs) : (paymentData.proofs[0] || ''))
             : paymentData.proof;
 
-        // Loop para inserir pagamentos (Lógica inalterada)
         const updates = [];
         for (const order of targetOrders) {
             if (remaining <= 0.01) break;
@@ -181,19 +185,17 @@ const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
             const payAmount = Math.min(remaining, currentDebt);
 
             if (payAmount > 0.01) {
-                // Insere Pagamento
                 const { error: payError } = await supabase.from('payments').insert([{
                     order_id: order.id,
                     amount: payAmount,
                     date: paymentData.date,
                     method: paymentData.method,
-                    proof: finalProof, // Agora é uma URL leve do R2!
+                    proof: finalProof,
                     description: finalDescription,
                     status: status
                 }]);
                 if (payError) throw payError;
                 
-                // Atualiza Pedido
                 if (!isCash) {
                     const newPaid = Number(order.paid || 0) + payAmount;
                     await supabase.from('orders').update({ paid: newPaid }).eq('id', order.id);
@@ -202,6 +204,7 @@ const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
             }
         }
         
+        setIsConfirming(false); // Fecha o modalzinho de confirmação
         setAlertInfo({ 
             type: 'success', 
             title: isCash ? 'Aguardando Conferência' : 'Sucesso', 
@@ -217,6 +220,7 @@ const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
         console.error(e);
         setAlertInfo({ type: 'error', title: 'Erro', message: 'Erro ao processar pagamento.' });
         setIsSubmitting(false);
+        setIsConfirming(false);
     }
   };
 
@@ -230,6 +234,41 @@ const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
         message={alertInfo?.message} 
         onClose={() => setAlertInfo(null)} 
       />
+
+      {/* NOVO: Modal de Confirmação Sobreposto */}
+      {isConfirming && (
+        <div className="fixed inset-0 z-[400] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-in fade-in">
+            <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl text-center space-y-4 animate-in zoom-in-95">
+                <div className="w-16 h-16 bg-indigo-50 text-indigo-500 rounded-full flex items-center justify-center mx-auto mb-2">
+                    <Check size={32} strokeWidth={3} />
+                </div>
+                <div>
+                    <h3 className="text-xl font-black text-slate-800 uppercase">Confirmar Pagamento?</h3>
+                    <p className="text-sm font-bold text-slate-500 mt-2">
+                        Você está prestes a registrar <span className="text-indigo-600 text-lg">{formatBRL(parseFloat(paymentData.amount || 0))}</span>
+                    </p>
+                    <p className="text-xs font-bold text-slate-400 mt-1 uppercase">
+                        Método: {paymentData.method}
+                    </p>
+                </div>
+                
+                <div className="flex gap-3 pt-4">
+                    <button 
+                        onClick={() => setIsConfirming(false)} 
+                        disabled={isSubmitting} 
+                        className="flex-1 py-3 bg-slate-100 text-slate-600 rounded-xl font-bold uppercase active:scale-95 transition-transform">
+                        Voltar
+                    </button>
+                    <button 
+                        onClick={handleConfirm} 
+                        disabled={isSubmitting} 
+                        className="flex-1 py-3 bg-green-500 text-white rounded-xl font-bold uppercase active:scale-95 transition-transform flex justify-center items-center gap-2">
+                        {isSubmitting ? <Loader2 className="animate-spin" size={18}/> : 'Sim, Confirmar'}
+                    </button>
+                </div>
+            </div>
+        </div>
+      )}
 
       <div className="bg-white w-full max-w-md rounded-[2.5rem] p-6 shadow-2xl animate-in slide-in-from-bottom-10 space-y-4 my-auto">
         
@@ -308,23 +347,38 @@ const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
                     </label>
                     
                     <div className="bg-slate-50 rounded-2xl border-2 border-dashed border-slate-200 p-2">
+                        
+                        {/* MINIATURAS: MODO MÊS (MÚLTIPLAS) */}
                         {selectionMode === 'month' && paymentData.proofs.length > 0 && (
                             <div className="flex flex-wrap gap-2 mb-2">
                                 {paymentData.proofs.map((p, i) => (
-                                    <div key={i} className="relative">
+                                    <div key={i} className="relative group">
                                         <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center text-indigo-600 border border-slate-200 overflow-hidden">
-                                            <img src={p} alt="proof" className="w-full h-full object-cover opacity-40" />
-                                            <ImageIcon size={14} className="absolute"/>
+                                            <img src={p} alt="proof" className="w-full h-full object-cover" />
                                         </div>
-                                        <button onClick={() => removeProof(i)} className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-0.5 shadow-sm"><X size={10}/></button>
+                                        <button onClick={() => removeProof(i)} className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-0.5 shadow-sm opacity-90 hover:opacity-100"><X size={10}/></button>
                                     </div>
                                 ))}
                             </div>
                         )}
 
-                        <label className={`w-full py-3 flex items-center justify-center gap-2 cursor-pointer text-slate-400 font-bold text-xs ${isUploading ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                        {/* NOVO - MINIATURA: MODO MANUAL (ÚNICA) */}
+                        {selectionMode === 'manual' && paymentData.proof && (
+                            <div className="flex flex-wrap gap-2 mb-2">
+                                <div className="relative group">
+                                    <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center text-indigo-600 border border-slate-200 overflow-hidden">
+                                        <img src={paymentData.proof} alt="proof" className="w-full h-full object-cover" />
+                                    </div>
+                                    <button onClick={(e) => { e.preventDefault(); setPaymentData(prev => ({...prev, proof: ''})); setProofFile(null); }} className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-0.5 shadow-sm opacity-90 hover:opacity-100"><X size={10}/></button>
+                                </div>
+                            </div>
+                        )}
+
+                        <label className={`w-full py-3 flex items-center justify-center gap-2 cursor-pointer text-slate-400 font-bold text-xs ${isUploading ? 'opacity-50 cursor-not-allowed' : 'hover:text-indigo-500 transition-colors'}`}>
                             {isUploading ? <Loader2 className="animate-spin" size={14}/> : <Upload size={14}/>} 
-                            {isUploading ? "Enviando..." : (selectionMode === 'month' ? "Adicionar Imagens" : (proofFile ? "Imagem Selecionada" : "Anexar"))} 
+                            {isUploading ? "Enviando..." : (
+                                selectionMode === 'month' ? "Adicionar Imagens" : (paymentData.proof ? "Trocar Imagem" : "Anexar Comprovante")
+                            )} 
                             <input type="file" className="hidden" accept="image/*" multiple={selectionMode === 'month'} onChange={handleFileChange} disabled={isUploading}/>
                         </label>
                     </div>
@@ -345,8 +399,9 @@ const BulkPaymentModal = ({ orders, onClose, onConfirm }) => {
         </div>
 
         <div className="pt-2">
-            <button onClick={handleConfirm} disabled={isSubmitting || isUploading} className="w-full py-4 bg-green-500 text-white rounded-2xl font-bold uppercase shadow-lg disabled:opacity-50 flex items-center justify-center gap-2 active:scale-95 transition-transform">
-                {isSubmitting ? <Loader2 className="animate-spin" size={20} /> : "Confirmar Pagamento"}
+            {/* O botão agora chama a validação (triggerConfirm) em vez de salvar direto */}
+            <button onClick={triggerConfirm} disabled={isSubmitting || isUploading} className="w-full py-4 bg-green-500 text-white rounded-2xl font-bold uppercase shadow-lg disabled:opacity-50 flex items-center justify-center gap-2 active:scale-95 transition-transform">
+                {isSubmitting ? <Loader2 className="animate-spin" size={20} /> : "Registrar Pagamento"}
             </button>
         </div>
       </div>

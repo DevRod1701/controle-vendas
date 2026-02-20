@@ -8,7 +8,7 @@ import { formatBRL } from '../utils/formatters';
 import OrderDetail from '../components/OrderDetail';
 import ConfirmModal from '../components/modals/ConfirmModal';
 import { uploadToR2 } from '../services/r2';
-import imageCompression from 'browser-image-compression'; // <--- IMPORTADO
+import imageCompression from 'browser-image-compression'; 
 
 const History = () => {
   const { orders, payments, refreshData } = useData();
@@ -22,7 +22,6 @@ const History = () => {
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null); 
   
-  // Estados para visualização de imagem
   const [viewImages, setViewImages] = useState(null); 
   const [currentImgIdx, setCurrentImgIdx] = useState(0);
   const [isLoadingImage, setIsLoadingImage] = useState(false);
@@ -131,34 +130,47 @@ const History = () => {
     );
   };
 
-  const handleViewImages = async (paymentId) => {
+  // --- NOVA FUNÇÃO DE VISUALIZAÇÃO DE IMAGENS ---
+  const handleViewImages = async (paymentData) => {
       if (isLoadingImage) return;
       setIsLoadingImage(true);
 
       try {
+          // Identifica se é um grupo (vários pagamentos) ou um único
+          const idsToFetch = paymentData.isGroup 
+              ? paymentData.items.map(i => i.id) 
+              : [paymentData.id];
+
+          // Busca todos os comprovantes de uma vez
           const { data, error } = await supabase
             .from('payments')
             .select('proof')
-            .eq('id', paymentId)
-            .single();
+            .in('id', idsToFetch);
 
-          if (error || !data || !data.proof) {
+          if (error || !data || data.length === 0) {
               throw new Error("Comprovante não encontrado");
           }
 
-          const proofStr = data.proof;
-          try {
-              const parsed = JSON.parse(proofStr);
-              if (Array.isArray(parsed)) {
-                  setViewImages(parsed);
-                  setCurrentImgIdx(0);
-              } else {
-                  setViewImages([proofStr]);
-                  setCurrentImgIdx(0);
+          let allProofs = [];
+          
+          // Junta todas as imagens num único array para o carrossel
+          data.forEach(row => {
+              if (row.proof) {
+                  try {
+                      const parsed = JSON.parse(row.proof);
+                      if (Array.isArray(parsed)) allProofs.push(...parsed);
+                      else allProofs.push(row.proof);
+                  } catch {
+                      allProofs.push(row.proof);
+                  }
               }
-          } catch {
-              setViewImages([proofStr]);
+          });
+
+          if (allProofs.length > 0) {
+              setViewImages(allProofs);
               setCurrentImgIdx(0);
+          } else {
+              setErrorModal({ title: "Aviso", message: "Nenhum comprovante de imagem anexado." });
           }
       } catch (err) {
           console.error(err);
@@ -167,6 +179,7 @@ const History = () => {
           setIsLoadingImage(false);
       }
   };
+  // ----------------------------------------------
 
   const handleDeletePayment = async (payment) => {
     if (isDeleting) return; 
@@ -209,24 +222,21 @@ const History = () => {
     }
   };
 
-  // --- FUNÇÃO DE UPLOAD OTIMIZADA ---
   const handleFileChange = async (e) => {
     const files = Array.from(e.target.files);
     
-    // Feedback visual
     const btn = e.target.parentElement;
     const originalText = btn.innerHTML;
-    btn.innerText = "Comprimindo..."; // Primeiro comprime
+    btn.innerText = "Comprimindo..."; 
 
     const compressionOptions = {
-      maxSizeMB: 1,              // Máximo 1MB
-      maxWidthOrHeight: 1920,    // Redimensiona se for 4k
+      maxSizeMB: 1,              
+      maxWidthOrHeight: 1920,    
       useWebWorker: true
     };
 
     for (const file of files) {
         try {
-            // 1. Comprime
             let fileToUpload = file;
             try {
                 fileToUpload = await imageCompression(file, compressionOptions);
@@ -234,8 +244,7 @@ const History = () => {
                 console.warn("Erro ao comprimir, usando original:", err);
             }
 
-            // 2. Envia
-            btn.innerText = "Enviando..."; // Depois envia
+            btn.innerText = "Enviando..."; 
             const publicUrl = await uploadToR2(fileToUpload);
 
             if (publicUrl) {
@@ -245,7 +254,6 @@ const History = () => {
             console.error("Erro no processo de imagem:", error);
         }
     }
-    // Restaura o botão
     btn.innerHTML = originalText;
   };
 
@@ -535,7 +543,8 @@ const History = () => {
                                       </div>
                                   </div>
                                   <div className="flex items-center gap-1">
-                                      {p.has_proof && <button onClick={(e) => { e.stopPropagation(); handleViewImages(p.items[0].id); }} className="p-2 bg-slate-50 text-slate-400 rounded-lg active:scale-90"><ImageIcon size={16}/></button>}
+                                      {/* MODIFICADO: Passa o objeto "p" inteiro em vez do ID */}
+                                      {p.has_proof && <button onClick={(e) => { e.stopPropagation(); handleViewImages(p); }} className="p-2 bg-slate-50 text-slate-400 rounded-lg active:scale-90"><ImageIcon size={16}/></button>}
                                       <div className="p-2 bg-slate-50 text-slate-400 rounded-lg">{isExpanded ? <ChevronUp size={16}/> : <ChevronDown size={16}/>}</div>
                                   </div>
                               </div>
@@ -583,7 +592,8 @@ const History = () => {
                               </div>
                           </div>
                           <div className="flex items-center gap-1">
-                              {p.has_proof && <button onClick={() => handleViewImages(p.id)} className="p-2 bg-slate-50 text-slate-400 rounded-lg active:scale-90"><ImageIcon size={16}/></button>}
+                              {/* MODIFICADO: Passa o objeto "p" inteiro em vez do ID */}
+                              {p.has_proof && <button onClick={() => handleViewImages(p)} className="p-2 bg-slate-50 text-slate-400 rounded-lg active:scale-90"><ImageIcon size={16}/></button>}
                               {isOwner && (
                                   <><button onClick={() => startEditingPayment(p)} className="p-2 bg-slate-50 text-indigo-400 rounded-lg active:scale-90"><Edit2 size={16}/></button><button onClick={() => setConfirmDelete(p)} className="p-2 bg-red-50 text-red-400 rounded-lg active:scale-90"><Trash2 size={16}/></button></>
                               )}
