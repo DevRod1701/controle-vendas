@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { 
     ArrowLeft, Plus, DollarSign, Calendar, Search, 
@@ -17,6 +17,12 @@ const CustomerDetail = () => {
   
   const shareDateRef = useRef(null);
   const shareMonthRef = useRef(null);
+
+  // --- MÁGICA DO SCROLL ---
+  // Força a página a carregar sempre no topo absoluto, ignorando a rolagem da tela anterior
+  useEffect(() => {
+      window.scrollTo({ top: 0, behavior: 'instant' });
+  }, []);
 
   const customer = customers.find(c => c.id === id);
   
