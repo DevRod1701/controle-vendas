@@ -26,30 +26,34 @@ export const DataProvider = ({ children }) => {
         const { data: prodData } = await supabase.from('products').select('*').order('name');
         if (prodData) setProducts(prodData);
 
-        // Pedidos (Limitamos aos últimos 500 para não pesar se tiver muitos)
+        // Pedidos (Aumentado para 5000 para você não perder histórico de vendas antigas)
         const { data: orderData } = await supabase
             .from('orders')
             .select('*, order_items(*)')
             .order('created_at', { ascending: false })
-            .limit(500); 
+            .limit(5000); 
         if (orderData) setOrders(orderData);
 
-        // Pagamentos - AQUI ESTÁ A CORREÇÃO CRÍTICA
+        // Pagamentos (Aumentado para 5000)
         // NÃO selecionamos a coluna 'proof'. Selecionamos 'has_proof'.
         // Isso reduz o tamanho do download de MBs para KBs.
         const { data: payData } = await supabase
             .from('payments')
             .select('id, amount, date, method, description, status, order_id, approver_name, has_proof') 
             .order('date', { ascending: false })
-            .limit(500);
+            .limit(5000);
         if (payData) setPayments(payData);
 
         // Clientes
         const { data: custData } = await supabase.from('customers').select('*').order('name');
         if (custData) setCustomers(custData);
 
-        // Transações
-        const { data: transData } = await supabase.from('customer_transactions').select('*').order('date', { ascending: false }).limit(500);
+        // Transações de Fiado (MUDANÇA CRÍTICA: Aumentado para 10000 para o saldo NUNCA quebrar)
+        const { data: transData } = await supabase
+            .from('customer_transactions')
+            .select('*')
+            .order('date', { ascending: false })
+            .limit(10000);
         if (transData) setCustomerTransactions(transData);
 
     } catch (error) {

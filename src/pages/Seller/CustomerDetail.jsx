@@ -15,31 +15,43 @@ const CustomerDetail = () => {
   const navigate = useNavigate();
   const { customers, customerTransactions, products, refreshData } = useData();
   
-  // Refs para os inputs do modal de compartilhamento
   const shareDateRef = useRef(null);
   const shareMonthRef = useRef(null);
 
   const customer = customers.find(c => c.id === id);
   
+  // --- BLINDAGEM 1: Transações do Cliente com ordenação segura ---
   const myTrans = useMemo(() => {
       return customerTransactions
         .filter(t => t.customer_id === id)
-        .sort((a, b) => new Date(b.date) - new Date(a.date));
+        .sort((a, b) => {
+            const dateA = new Date((a.date || a.created_at || '').split('T')[0]);
+            const dateB = new Date((b.date || b.created_at || '').split('T')[0]);
+            return dateB - dateA;
+        });
   }, [customerTransactions, id]);
 
+  // --- BLINDAGEM 2: Saldo Total ---
   const currentTotalBalance = useMemo(() => {
-    const purchase = myTrans.filter(t => t.type === 'purchase').reduce((acc, t) => acc + Number(t.amount), 0);
-    const paid = myTrans.filter(t => t.type === 'payment').reduce((acc, t) => acc + Number(t.amount), 0);
+    const purchase = myTrans
+        .filter(t => t.type === 'purchase' || t.type === 'sale')
+        .reduce((acc, t) => acc + Number(t.amount || t.total || 0), 0);
+        
+    const paid = myTrans
+        .filter(t => t.type === 'payment')
+        .reduce((acc, t) => acc + Number(t.amount || t.total || 0), 0);
+        
     return purchase - paid;
   }, [myTrans]);
 
-  // --- LÓGICA DE AMORTIZAÇÃO (FIFO) ---
+  // --- BLINDAGEM 3: LÓGICA DE AMORTIZAÇÃO ACUMULATIVA (BOLA DE NEVE) ---
   const groupedHistory = useMemo(() => {
       const groups = {};
-      let globalPaymentPool = myTrans.filter(t => t.type === 'payment').reduce((acc, t) => acc + Number(t.amount), 0);
 
       myTrans.forEach(t => {
-          const dateObj = new Date(t.date + 'T12:00:00');
+          const rawDate = (t.date || t.created_at || '').split('T')[0];
+          const dateObj = new Date(rawDate + 'T12:00:00');
+          
           const key = `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}`;
           const label = dateObj.toLocaleString('pt-BR', { month: 'long', year: 'numeric' });
 
@@ -47,18 +59,20 @@ const CustomerDetail = () => {
               groups[key] = { id: key, label: label, items: [], purchasesInMonth: 0, paymentsInMonth: 0 };
           }
           groups[key].items.push(t);
-          if (t.type === 'purchase') groups[key].purchasesInMonth += Number(t.amount);
-          else groups[key].paymentsInMonth += Number(t.amount);
+          
+          const val = Number(t.amount || t.total || 0);
+          if (t.type === 'purchase' || t.type === 'sale') groups[key].purchasesInMonth += val;
+          else if (t.type === 'payment') groups[key].paymentsInMonth += val;
       });
 
       const sortedKeys = Object.keys(groups).sort();
+      let accumulatedDebt = 0; 
+      
       const calculatedGroups = sortedKeys.map(key => {
           const group = groups[key];
-          const debtThisMonth = group.purchasesInMonth;
-          const amountPaidForThisMonth = Math.min(debtThisMonth, globalPaymentPool);
-          const remainingDebtThisMonth = debtThisMonth - amountPaidForThisMonth;
-          globalPaymentPool -= amountPaidForThisMonth;
-
+          const totalDebtAtThisPoint = accumulatedDebt + group.purchasesInMonth;
+          const remainingDebtThisMonth = totalDebtAtThisPoint - group.paymentsInMonth;
+          accumulatedDebt = remainingDebtThisMonth;
           return { ...group, amortizedDebt: remainingDebtThisMonth };
       });
 
@@ -85,8 +99,9 @@ const CustomerDetail = () => {
 
   const formatDateDisplay = (dateString) => {
     if (!dateString) return '';
-    const parts = dateString.split('-');
-    if (parts.length !== 3) return dateString;
+    const cleanDate = dateString.split('T')[0];
+    const parts = cleanDate.split('-');
+    if (parts.length !== 3) return cleanDate;
     return `${parts[2]}/${parts[1]}/${parts[0]}`;
   };
 
@@ -115,7 +130,6 @@ const CustomerDetail = () => {
   const [alertInfo, setAlertInfo] = useState(null);
   const [confirmDialog, setConfirmDialog] = useState(null);
 
-  // Compartilhamento
   const [showShareModal, setShowShareModal] = useState(false);
   const [shareDate, setShareDate] = useState(getTodayLocal());
   const [shareMonth, setShareMonth] = useState(getTodayLocal().slice(0, 7));
@@ -125,12 +139,9 @@ const CustomerDetail = () => {
     return products.filter(p => p.name.toLowerCase().includes(productSearch.toLowerCase()));
   }, [products, productSearch]);
 
-  // --- FUNÇÃO DE NAVEGAÇÃO DO MÊS DE COMPARTILHAMENTO ---
   const navigateShareMonth = (direction) => {
       const [y, m] = shareMonth.split('-');
-      // Cria data no dia 1, ajusta o mês
       const date = new Date(Number(y), Number(m) - 1 + direction, 1);
-      
       const newYear = date.getFullYear();
       const newMonth = String(date.getMonth() + 1).padStart(2, '0');
       setShareMonth(`${newYear}-${newMonth}`);
@@ -153,7 +164,7 @@ const CustomerDetail = () => {
     else { setLoading(false); setAlertInfo({ type: 'error', title: 'Erro', message: 'Falha ao excluir.' }); }
   };
 
-  // --- SHARE LOGIC ---
+  // --- COMPARTILHAMENTO INTELIGENTE (Troca Devedor por Crédito) ---
   const handleShareOption = (type) => {
     if (!customer.phone) { setAlertInfo({ type: 'error', title: 'Sem Telefone', message: 'Cadastre um telefone.' }); return; }
 
@@ -169,43 +180,46 @@ const CustomerDetail = () => {
         title = "EXTRATO COMPLETO";
     } else if (type === 'today') {
         const today = getTodayLocal();
-        filteredTrans = myTrans.filter(t => t.date === today);
+        filteredTrans = myTrans.filter(t => (t.date || t.created_at || '').split('T')[0] === today);
         title = "RESUMO DE HOJE";
-        const dayBuy = filteredTrans.filter(t => t.type === 'purchase').reduce((acc, t) => acc + t.amount, 0);
-        const dayPay = filteredTrans.filter(t => t.type === 'payment').reduce((acc, t) => acc + t.amount, 0);
+        const dayBuy = filteredTrans.filter(t => t.type === 'purchase' || t.type === 'sale').reduce((acc, t) => acc + Number(t.amount || t.total || 0), 0);
+        const dayPay = filteredTrans.filter(t => t.type === 'payment').reduce((acc, t) => acc + Number(t.amount || t.total || 0), 0);
         periodTotalMsg = `📝 *Movimentação Hoje:*\nCompras: ${formatBRL(dayBuy)}\nPagos: ${formatBRL(dayPay)}`;
     } else if (type === 'date') {
-        filteredTrans = myTrans.filter(t => t.date === shareDate);
+        filteredTrans = myTrans.filter(t => (t.date || t.created_at || '').split('T')[0] === shareDate);
         title = `RESUMO DO DIA ${formatDateDisplay(shareDate)}`;
-        const dayBuy = filteredTrans.filter(t => t.type === 'purchase').reduce((acc, t) => acc + t.amount, 0);
-        const dayPay = filteredTrans.filter(t => t.type === 'payment').reduce((acc, t) => acc + t.amount, 0);
+        const dayBuy = filteredTrans.filter(t => t.type === 'purchase' || t.type === 'sale').reduce((acc, t) => acc + Number(t.amount || t.total || 0), 0);
+        const dayPay = filteredTrans.filter(t => t.type === 'payment').reduce((acc, t) => acc + Number(t.amount || t.total || 0), 0);
         periodTotalMsg = `📝 *Movimentação ${formatDateDisplay(shareDate)}:*\nCompras: ${formatBRL(dayBuy)}\nPagos: ${formatBRL(dayPay)}`;
     } else if (type === 'month') {
-        filteredTrans = myTrans.filter(t => t.date.startsWith(shareMonth));
+        filteredTrans = myTrans.filter(t => (t.date || t.created_at || '').split('T')[0].startsWith(shareMonth));
         const [y, m] = shareMonth.split('-');
         const monthLabel = new Date(Number(y), Number(m)-1).toLocaleString('pt-BR', { month: 'long', year: 'numeric' });
         title = `EXTRATO DE ${monthLabel.toUpperCase()}`;
-        const monthBuy = filteredTrans.filter(t => t.type === 'purchase').reduce((acc, t) => acc + t.amount, 0);
-        const monthPay = filteredTrans.filter(t => t.type === 'payment').reduce((acc, t) => acc + t.amount, 0);
+        const monthBuy = filteredTrans.filter(t => t.type === 'purchase' || t.type === 'sale').reduce((acc, t) => acc + Number(t.amount || t.total || 0), 0);
+        const monthPay = filteredTrans.filter(t => t.type === 'payment').reduce((acc, t) => acc + Number(t.amount || t.total || 0), 0);
         periodTotalMsg = `📅 *Resumo do Mês:*\nTotal Comprado: ${formatBRL(monthBuy)}\nTotal Pago: ${formatBRL(monthPay)}`;
     }
 
-    if (filteredTrans.length === 0) { setAlertInfo({ type: 'error', title: 'Vazio', message: 'Nenhuma movimentação.' }); return; }
+    if (filteredTrans.length === 0) { setAlertInfo({ type: 'error', title: 'Vazio', message: 'Nenhuma movimentação no período.' }); return; }
 
     const historyText = filteredTrans.map(t => {
-        const icon = t.type === 'purchase' ? '🔴' : '🟢';
-        return `${icon} ${formatDateDisplay(t.date)} - ${t.description}: ${formatBRL(t.amount)}`;
+        const icon = (t.type === 'purchase' || t.type === 'sale') ? '🔴' : '🟢';
+        return `${icon} ${formatDateDisplay(t.date || t.created_at)} - ${t.description}: ${formatBRL(Number(t.amount || t.total || 0))}`;
     }).join('\n');
 
-    let message = `*${title} - MEU PUDINZINHO* 🍮\nClient: *${customer.name}*\n\n_Detalhes:_\n${historyText}\n\n`;
+    let message = `*${title} - MEU PUDINZINHO* 🍮\nCliente: *${customer.name}*\n\n_Detalhes:_\n${historyText}\n\n`;
     if (periodTotalMsg) message += `${periodTotalMsg}\n\n`;
-    message += `-----------------------------\n📊 *SALDO DEVEDOR TOTAL: ${formatBRL(currentTotalBalance)}*\n-----------------------------`;
+
+    // LÓGICA DO TEXTO FINAL PARA WHATSAPP
+    const balanceLabel = currentTotalBalance > 0.01 ? 'SALDO DEVEDOR' : currentTotalBalance < -0.01 ? 'CRÉDITO DISPONÍVEL' : 'SALDO QUITADO';
+    message += `-----------------------------\n📊 *${balanceLabel}: ${formatBRL(Math.abs(currentTotalBalance))}*\n-----------------------------`;
 
     window.open(`https://wa.me/${phone}?text=${encodeURIComponent(message)}`, '_blank');
     setShowShareModal(false);
   };
 
-  // --- TRANSACTIONS CRUD ---
+  // --- TRANSAÇÕES CRUD ---
   const handleSelectProduct = (prod) => { setSelectedProductObj(prod); setQty(1); setForm({ ...form, description: prod.name, amount: prod.price, date: getTodayLocal() }); setProductSearch(''); };
   const handleQtyChange = (delta) => { if (!selectedProductObj) return; const newQty = Math.max(1, qty + delta); setQty(newQty); setForm(prev => ({ ...prev, amount: selectedProductObj.price * newQty })); };
   const handleChangeProduct = () => { setSelectedProductObj(null); setQty(1); setForm({ ...form, description: '', amount: '' }); };
@@ -262,14 +276,18 @@ const CustomerDetail = () => {
         )}
       </div>
 
-      {/* SALDO TOTAL */}
+      {/* SALDO TOTAL - ATUALIZADO COM TERNÁRIO E MATH.ABS() */}
       <div className={`p-6 rounded-[2.5rem] text-center border-2 relative overflow-hidden ${currentTotalBalance > 0.01 ? 'bg-red-50 border-red-100' : 'bg-green-50 border-green-100'}`}>
-        <p className={`text-xs uppercase font-black tracking-widest ${currentTotalBalance > 0.01 ? 'text-red-400' : 'text-green-600'}`}>Saldo Devedor Total</p>
-        <p className={`text-4xl font-black font-mono ${currentTotalBalance > 0.01 ? 'text-red-500' : 'text-green-600'}`}>{formatBRL(currentTotalBalance)}</p>
+        <p className={`text-xs uppercase font-black tracking-widest ${currentTotalBalance > 0.01 ? 'text-red-400' : 'text-green-600'}`}>
+            {currentTotalBalance > 0.01 ? 'Saldo Devedor Total' : currentTotalBalance < -0.01 ? 'Crédito Disponível' : 'Saldo Quitado'}
+        </p>
+        <p className={`text-4xl font-black font-mono ${currentTotalBalance > 0.01 ? 'text-red-500' : 'text-green-600'}`}>
+            {formatBRL(Math.abs(currentTotalBalance))}
+        </p>
         <button onClick={() => setShowShareModal(true)} className="absolute top-4 right-4 p-2 bg-white/50 rounded-full text-slate-600 hover:bg-green-500 hover:text-white transition-colors active:scale-90"><Share2 size={18} /></button>
       </div>
 
-      {/* MODAL COMPARTILHAR - ATUALIZADO COM SETAS */}
+      {/* MODAL COMPARTILHAR */}
       {showShareModal && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[350] flex items-end sm:items-center justify-center p-4 animate-in fade-in">
             <div className="bg-white w-full max-w-sm rounded-[2.5rem] p-6 shadow-2xl animate-in slide-in-from-bottom-10 space-y-4 max-h-[85vh] overflow-y-auto">
@@ -298,7 +316,6 @@ const CustomerDetail = () => {
                         </div>
                     </div>
 
-                    {/* OPÇÃO MÊS COM NAVEGAÇÃO POR SETAS */}
                     <div className="w-full p-4 bg-indigo-50 border border-indigo-100 rounded-2xl flex flex-col gap-2">
                         <div className="flex items-center gap-3">
                             <div className="p-2 bg-indigo-200 rounded-full text-indigo-700"><Calendar size={18}/></div>
@@ -424,6 +441,8 @@ const CustomerDetail = () => {
                         <div className="text-right">
                             {remainingDebt > 0.01 ? (
                                 <p className="text-sm font-black text-red-500 font-mono">Deve {formatBRL(remainingDebt)}</p>
+                            ) : remainingDebt < -0.01 ? (
+                                <p className="text-sm font-black text-green-500 font-mono uppercase">Crédito {formatBRL(Math.abs(remainingDebt))}</p>
                             ) : (
                                 <p className="text-sm font-black text-green-500 font-mono uppercase">Quitado</p>
                             )}
@@ -436,17 +455,17 @@ const CustomerDetail = () => {
                             {group.items.map(t => (
                                 <div key={t.id} className="flex justify-between items-start p-3 hover:bg-slate-50 rounded-xl transition-colors">
                                     <div className="flex items-start gap-3 flex-1 min-w-0">
-                                        <div className={`p-2 rounded-lg flex-shrink-0 ${t.type === 'purchase' ? 'bg-red-50 text-red-400' : 'bg-green-50 text-green-500'}`}>
-                                            {t.type === 'purchase' ? <Calendar size={14}/> : <DollarSign size={14}/>}
+                                        <div className={`p-2 rounded-lg flex-shrink-0 ${t.type === 'purchase' || t.type === 'sale' ? 'bg-red-50 text-red-400' : 'bg-green-50 text-green-500'}`}>
+                                            {t.type === 'purchase' || t.type === 'sale' ? <Calendar size={14}/> : <DollarSign size={14}/>}
                                         </div>
                                         <div className="min-w-0 pr-2">
                                             <p className="font-bold text-slate-700 text-xs break-words leading-tight">{t.description}</p>
-                                            <p className="text-[9px] text-slate-400 font-bold mt-0.5">{formatDateDisplay(t.date)}</p>
+                                            <p className="text-[9px] text-slate-400 font-bold mt-0.5">{formatDateDisplay(t.date || t.created_at)}</p>
                                         </div>
                                     </div>
                                     <div className="text-right flex-shrink-0 ml-1">
-                                        <p className={`font-mono font-black text-xs ${t.type === 'purchase' ? 'text-red-400' : 'text-green-500'}`}>
-                                            {t.type === 'purchase' ? '-' : '+'} {formatBRL(t.amount)}
+                                        <p className={`font-mono font-black text-xs ${t.type === 'purchase' || t.type === 'sale' ? 'text-red-400' : 'text-green-500'}`}>
+                                            {t.type === 'purchase' || t.type === 'sale' ? '-' : '+'} {formatBRL(Number(t.amount || t.total || 0))}
                                         </p>
                                         <button onClick={() => { setConfirmDialog({ title: 'Apagar?', message: 'Confirmar exclusão?', action: () => confirmDeleteTransaction(t.id) }) }} className="text-[8px] text-red-300 font-bold uppercase mt-1 hover:text-red-500">Apagar</button>
                                     </div>

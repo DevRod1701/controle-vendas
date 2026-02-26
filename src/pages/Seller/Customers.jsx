@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, UserPlus, Search, Users, ChevronRight, ChevronLeft, Filter, Phone, Calendar, Clock, List, X } from 'lucide-react';
 import { useData } from '../../contexts/DataContext';
@@ -7,22 +7,25 @@ import { supabase } from '../../services/supabase';
 import { formatBRL } from '../../utils/formatters';
 import { Loader } from '../../components/ui/Loader';
 
+// Função auxiliar para resgatar números salvos no cache do navegador
+const getStoredInt = (key, defaultVal) => {
+    const val = sessionStorage.getItem(key);
+    return val !== null ? parseInt(val) : defaultVal;
+};
+
 const Customers = () => {
   const { customers, customerTransactions, refreshData } = useData();
   const { session } = useAuth();
   const navigate = useNavigate();
   
-  // --- ESTADOS ---
-  const [search, setSearch] = useState('');
-  const [filterDebt, setFilterDebt] = useState(false); // Apenas Devedores?
+  // --- ESTADOS COM MEMÓRIA (Salvam no Cache do Navegador) ---
+  const [search, setSearch] = useState(() => sessionStorage.getItem('cust_search') || '');
+  const [filterDebt, setFilterDebt] = useState(() => sessionStorage.getItem('cust_filterDebt') === 'true'); 
+  const [viewMode, setViewMode] = useState(() => sessionStorage.getItem('cust_viewMode') || 'all'); 
   
-  // Filtros de Tempo: 'all' (Geral), 'month' (Mês), 'day' (Dia Específico)
-  const [viewMode, setViewMode] = useState('all'); 
-  
-  // Controles de Data
-  const [month, setMonth] = useState(new Date().getMonth());
-  const [year, setYear] = useState(new Date().getFullYear());
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+  const [month, setMonth] = useState(() => getStoredInt('cust_month', new Date().getMonth()));
+  const [year, setYear] = useState(() => getStoredInt('cust_year', new Date().getFullYear()));
+  const [selectedDate, setSelectedDate] = useState(() => sessionStorage.getItem('cust_selectedDate') || new Date().toISOString().split('T')[0]);
 
   const [isCreating, setIsCreating] = useState(false);
   const [newCustomer, setNewCustomer] = useState({ name: '', phone: '' });
@@ -30,124 +33,82 @@ const Customers = () => {
 
   const monthsList = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
 
-  // --- NAVEGAÇÃO DE MÊS ---
+  // --- MÁGICA 1: Salva os filtros toda vez que o usuário digita ou clica em algo ---
+  useEffect(() => {
+      sessionStorage.setItem('cust_search', search);
+      sessionStorage.setItem('cust_filterDebt', filterDebt);
+      sessionStorage.setItem('cust_viewMode', viewMode);
+      sessionStorage.setItem('cust_month', month.toString());
+      sessionStorage.setItem('cust_year', year.toString());
+      sessionStorage.setItem('cust_selectedDate', selectedDate);
+  }, [search, filterDebt, viewMode, month, year, selectedDate]);
+
   const prevMonth = () => { if (month === 0) { setMonth(11); setYear(year - 1); } else { setMonth(month - 1); } };
   const nextMonth = () => { if (month === 11) { setMonth(0); setYear(year + 1); } else { setMonth(month + 1); } };
 
-  // --- LÓGICA PRINCIPAL (CORRIGIDA COM FIFO/AMORTIZAÇÃO) ---
+  // --- LÓGICA PRINCIPAL (Cálculo Global Correto + Filtro de Atividade) ---
   const customersWithBalance = useMemo(() => {
     return customers.map(c => {
-      // 1. Pega TODAS as transações do cliente
       const allTrans = customerTransactions.filter(t => t.customer_id === c.id);
       
-      // 2. Calcula o "Pool" Global de Pagamentos (Tudo que ele já pagou na vida)
-      let globalPaymentPool = allTrans
+      const totalPurchases = allTrans
+          .filter(t => t.type === 'purchase' || t.type === 'sale')
+          .reduce((acc, t) => acc + Number(t.amount || t.total || 0), 0);
+          
+      const totalPayments = allTrans
           .filter(t => t.type === 'payment')
-          .reduce((acc, t) => acc + Number(t.amount), 0);
+          .reduce((acc, t) => acc + Number(t.amount || t.total || 0), 0);
+          
+      const globalBalance = totalPurchases - totalPayments;
 
-      let balance = 0;
       let hasActivity = false;
 
-      // --- MODO GERAL (Saldo Total da Vida) ---
       if (viewMode === 'all') {
-          const totalPurchases = allTrans
-              .filter(t => t.type === 'purchase')
-              .reduce((acc, t) => acc + Number(t.amount), 0);
-          
-          balance = totalPurchases - globalPaymentPool;
           hasActivity = allTrans.length > 0;
-      } 
-      // --- MODO POR PERÍODO (Amortização FIFO) ---
-      else {
-          // Separa as compras em ordem cronológica
-          const sortedPurchases = allTrans
-              .filter(t => t.type === 'purchase')
-              .sort((a, b) => new Date(a.date) - new Date(b.date));
-
-          let debtBeforePeriod = 0;
-          let debtInPeriod = 0;
-
-          sortedPurchases.forEach(t => {
-              // Ajuste de fuso horário para comparação segura
-              const tDate = new Date(t.date + 'T12:00:00');
-              let isInPeriod = false;
-              let isBeforePeriod = false;
-
+      } else {
+          allTrans.forEach(t => {
+              const transDateStr = (t.date || t.created_at || '').split('T')[0];
+              
               if (viewMode === 'month') {
-                  // Verifica se é o mês selecionado
-                  isInPeriod = tDate.getMonth() === month && tDate.getFullYear() === year;
-                  // Verifica se é ANTES do mês selecionado
-                  if (!isInPeriod) {
-                      if (tDate.getFullYear() < year || (tDate.getFullYear() === year && tDate.getMonth() < month)) {
-                          isBeforePeriod = true;
-                      }
+                  const tDate = new Date(transDateStr + 'T12:00:00');
+                  if (tDate.getMonth() === month && tDate.getFullYear() === year) {
+                      hasActivity = true;
                   }
               } else if (viewMode === 'day') {
-                  // Verifica se é o dia selecionado
-                  isInPeriod = t.date === selectedDate;
-                  // Verifica se é ANTES do dia selecionado
-                  if (!isInPeriod && t.date < selectedDate) {
-                      isBeforePeriod = true;
+                  if (transDateStr === selectedDate) {
+                      hasActivity = true;
                   }
-              }
-
-              if (isInPeriod) {
-                  debtInPeriod += Number(t.amount);
-                  hasActivity = true; // Marcar que comprou neste período
-              } else if (isBeforePeriod) {
-                  debtBeforePeriod += Number(t.amount);
               }
           });
-
-          // LÓGICA DE OURO: AMORTIZAÇÃO
-          // 1. O dinheiro total paga primeiro as dívidas antigas (debtBeforePeriod)
-          const amountUsedForOldDebt = Math.min(debtBeforePeriod, globalPaymentPool);
-          
-          // 2. O que sobrar do dinheiro (remainingPool) é usado para abater a dívida do período atual
-          const remainingPool = Math.max(0, globalPaymentPool - amountUsedForOldDebt);
-          const amountPaidForPeriod = Math.min(debtInPeriod, remainingPool);
-
-          // 3. O Saldo do período é: O que comprou no período - O que conseguiu pagar no período
-          balance = debtInPeriod - amountPaidForPeriod;
-
-          // Se não comprou nada, verificamos se PAGOU algo neste período (para exibir na lista)
-          if (!hasActivity) {
-              const paymentInPeriod = allTrans.some(t => {
-                  if (t.type !== 'payment') return false;
-                  if (viewMode === 'day') return t.date === selectedDate;
-                  if (viewMode === 'month') {
-                      const tDate = new Date(t.date + 'T12:00:00');
-                      return tDate.getMonth() === month && tDate.getFullYear() === year;
-                  }
-                  return false;
-              });
-              if (paymentInPeriod) hasActivity = true;
-          }
       }
 
       return { 
           ...c, 
-          balance,
+          balance: globalBalance,
           hasActivity
       };
     })
-    .filter(c => c.name.toLowerCase().includes(search.toLowerCase())) // Filtro Nome
+    .filter(c => c.name.toLowerCase().includes(search.toLowerCase())) 
     .filter(c => {
-        // Lógica de Exibição
-        if (filterDebt) return c.balance > 0.01; // Se ativado "Apenas Devedores", esconde quem tá zerado/negativo
-        
-        // Se estiver filtrando por tempo (mês ou dia), só mostra quem teve atividade OU quem tem saldo pendente gerado nesse dia
+        if (filterDebt) return c.balance > 0.01; 
         if (viewMode !== 'all') return c.hasActivity; 
-        
-        return true; // No modo geral, mostra todos
+        return true; 
     })
     .sort((a, b) => {
-        // Quem deve mais aparece primeiro se o filtro de dívida estiver ativo
         if (filterDebt) return b.balance - a.balance;
-        // Senão, ordem alfabética
         return a.name.localeCompare(b.name);
     });
   }, [customers, customerTransactions, search, filterDebt, viewMode, month, year, selectedDate]);
+
+  // --- MÁGICA 2: Restaura a posição da tela (Scroll) ao carregar a lista ---
+  useEffect(() => {
+      const savedScroll = sessionStorage.getItem('cust_scroll');
+      if (savedScroll && customersWithBalance.length > 0) {
+          setTimeout(() => {
+              window.scrollTo({ top: parseInt(savedScroll), behavior: 'instant' });
+          }, 50); // Um fôlego minúsculo pro React desenhar os botões na tela antes de rolar
+      }
+  }, [customersWithBalance.length]);
 
   const totalDebtVisible = useMemo(() => {
     return customersWithBalance.reduce((acc, c) => acc + (c.balance > 0 ? c.balance : 0), 0);
@@ -162,12 +123,25 @@ const Customers = () => {
     setLoading(false);
   };
 
+  // --- MÁGICA 3: Salva o momento exato do clique ---
+  const handleCustomerClick = (customerId) => {
+      sessionStorage.setItem('cust_scroll', window.scrollY.toString());
+      navigate(`/clientes/${customerId}`);
+  };
+
+  // Botão de voltar para a Home (Limpa os filtros de pesquisa pra não confundir depois)
+  const handleGoHome = () => {
+      sessionStorage.removeItem('cust_search');
+      sessionStorage.removeItem('cust_scroll');
+      navigate('/');
+  };
+
   return (
     <div className="p-6 pb-24 space-y-4 animate-in fade-in font-bold">
       
       {/* HEADER */}
       <div className="flex items-center gap-3">
-        <button onClick={() => navigate('/')} className="p-3 bg-white rounded-2xl shadow-sm"><ArrowLeft size={20}/></button>
+        <button onClick={handleGoHome} className="p-3 bg-white rounded-2xl shadow-sm"><ArrowLeft size={20}/></button>
         <h2 className="text-xl font-black text-slate-800 uppercase">Meus Clientes</h2>
       </div>
 
@@ -183,7 +157,6 @@ const Customers = () => {
       {/* PAINEL DE FILTROS */}
       <div className="bg-white p-3 rounded-[2rem] shadow-sm space-y-3 border border-slate-50">
           
-          {/* Abas de Modo */}
           <div className="flex bg-slate-100 p-1 rounded-2xl">
               <button onClick={() => setViewMode('all')} className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase transition-all flex items-center justify-center gap-1 ${viewMode === 'all' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-400'}`}>
                   <List size={12}/> Geral
@@ -196,7 +169,6 @@ const Customers = () => {
               </button>
           </div>
 
-          {/* Sub-Filtros Condicionais */}
           {viewMode === 'month' && (
               <div className="flex items-center justify-between bg-slate-50 p-2 rounded-xl animate-in slide-in-from-top-2">
                   <button onClick={prevMonth} className="p-2 bg-white rounded-lg shadow-sm active:scale-90 text-slate-600"><ChevronLeft size={16}/></button>
@@ -213,12 +185,10 @@ const Customers = () => {
                   <div className="flex-1">
                     <input type="date" className="w-full p-3 bg-white rounded-xl font-bold text-slate-700 outline-none text-center uppercase text-sm" value={selectedDate} onChange={e => setSelectedDate(e.target.value)} />
                   </div>
-                  {/* Botão para limpar data/resetar hoje se quiser, opcional */}
                   <button onClick={() => setSelectedDate(new Date().toISOString().split('T')[0])} className="p-3 bg-white rounded-xl text-slate-400 active:scale-90"><Calendar size={16}/></button>
               </div>
           )}
 
-          {/* Toggle Devedores + Totalizador */}
           <div className="flex justify-between items-center px-1">
               <button onClick={() => setFilterDebt(!filterDebt)} className={`flex items-center gap-2 text-[10px] font-black uppercase transition-colors ${filterDebt ? 'text-red-500' : 'text-slate-400'}`}>
                 <div className={`w-5 h-5 rounded-lg border flex items-center justify-center ${filterDebt ? 'bg-red-500 border-red-500 text-white' : 'border-slate-300 bg-white'}`}>
@@ -235,7 +205,6 @@ const Customers = () => {
           </div>
       </div>
 
-      {/* FORMULÁRIO NOVO CLIENTE */}
       {isCreating && (
         <form onSubmit={handleCreate} className="bg-white p-6 rounded-[2.5rem] shadow-lg border-2 border-yellow-100 animate-in slide-in-from-top-4 space-y-4">
             <h3 className="text-sm font-black text-slate-800 uppercase">Novo Cliente</h3>
@@ -261,9 +230,8 @@ const Customers = () => {
         )}
         
         {customersWithBalance.map(c => (
-            <button key={c.id} onClick={() => navigate(`/clientes/${c.id}`)} className="w-full bg-white p-5 rounded-[2rem] shadow-sm flex justify-between items-center border border-slate-50 active:scale-[0.98] transition-all text-left">
+            <button key={c.id} onClick={() => handleCustomerClick(c.id)} className="w-full bg-white p-5 rounded-[2rem] shadow-sm flex justify-between items-center border border-slate-50 active:scale-[0.98] transition-all text-left">
                 
-                {/* LADO ESQUERDO: Nome e Telefone */}
                 <div>
                     <p className="font-black text-slate-800 text-sm">{c.name}</p>
                     <div className="flex items-center gap-1 mt-1 text-slate-400">
@@ -272,7 +240,6 @@ const Customers = () => {
                     </div>
                 </div>
                 
-                {/* LADO DIREITO: Valor e Label */}
                 <div className="text-right">
                     {c.balance > 0.01 ? (
                         <>
