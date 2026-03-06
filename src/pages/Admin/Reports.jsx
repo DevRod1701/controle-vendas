@@ -1,35 +1,63 @@
-import React, { useState, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useMemo, useEffect } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { 
-    ArrowLeft, PieChart, TrendingUp, FileText, Printer, Search, ChevronLeft, ChevronRight, ChevronDown, ChevronUp
+    ArrowLeft, PieChart, TrendingUp, FileText, Printer, Search, ChevronLeft, ChevronRight, 
+    ChevronDown, ChevronUp, Calculator, Share2, Save, Loader2, CheckCircle2, Trash2, 
+    Plus, DollarSign, Calendar as CalendarIcon, Clock, X, AlertTriangle, RefreshCw
 } from 'lucide-react';
 import { useData } from '../../contexts/DataContext';
+import { useAuth } from '../../contexts/AuthContext';
+import { supabase } from '../../services/supabase';
 import { formatBRL } from '../../utils/formatters';
 import { executePrint } from '../../utils/printHandler';
 import { reportTemplate } from '../../utils/print/reportTemplate'; 
+import { commissionTemplate } from '../../utils/print/commissionTemplate'; 
 
 const Reports = () => {
   const navigate = useNavigate();
-  const { orders, payments } = useData();
+  const location = useLocation();
+  const { orders, payments, settlements, refreshData } = useData();
+  const { session, isAdmin } = useAuth();
 
-  // Estados dos Filtros
   const [dateMode, setDateMode] = useState('month'); 
   const now = new Date();
-  const [viewYear, setViewYear] = useState(now.getFullYear());
-  const [selectedMonthStr, setSelectedMonthStr] = useState(new Date().toISOString().slice(0, 7)); 
+  
+  // Recebe parâmetros de navegação (se veio do Dashboard clicando na notificação)
+  const initialYear = location.state?.monthStr ? Number(location.state.monthStr.split('-')[0]) : now.getFullYear();
+  const initialMonthStr = location.state?.monthStr || new Date().toISOString().slice(0, 7);
+  const initialSeller = location.state?.sellerId || (isAdmin ? 'all' : session?.user?.id);
+
+  const [viewYear, setViewYear] = useState(initialYear);
+  const [selectedMonthStr, setSelectedMonthStr] = useState(initialMonthStr); 
   const [showMonthPicker, setShowMonthPicker] = useState(false); 
 
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
   
-  const [selectedSeller, setSelectedSeller] = useState('all');
+  const [selectedSellerState, setSelectedSellerState] = useState(initialSeller);
+  const activeSeller = isAdmin ? selectedSellerState : session?.user?.id;
+
   const [sellerSearch, setSellerSearch] = useState('');
   const [showSellerDropdown, setShowSellerDropdown] = useState(false);
 
   const [reportType, setReportType] = useState('full'); 
   const [expandRanking, setExpandRanking] = useState(false); 
 
+  const [tempRate, setTempRate] = useState(20);
+  const [extraDiscount, setExtraDiscount] = useState('');
+  const [isSavingAcerto, setIsSavingAcerto] = useState(false);
+
+  const [showPaymentForm, setShowPaymentForm] = useState(false);
+  const [payAmount, setPayAmount] = useState('');
+  const [payDate, setPayDate] = useState(new Date().toISOString().split('T')[0]);
+
   const monthsList = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+
+  // Limpa os descontos e fecha os painéis quando muda de vendedor ou mês
+  useEffect(() => {
+      setExtraDiscount('');
+      setShowPaymentForm(false);
+  }, [activeSeller, selectedMonthStr]);
 
   const handleSelectMonth = (monthIndex) => {
     const m = String(monthIndex + 1).padStart(2, '0');
@@ -37,7 +65,13 @@ const Reports = () => {
     setShowMonthPicker(false); 
   };
 
-  // --- 1. FILTRAGEM BÁSICA (Por Data e Vendedor) ---
+  useEffect(() => {
+      if (activeSeller !== 'all') {
+          supabase.from('profiles').select('commission_rate').eq('id', activeSeller).single()
+          .then(({data}) => { if (data) setTempRate(data.commission_rate || 0); });
+      }
+  }, [activeSeller]);
+
   const filteredData = useMemo(() => {
     let start, end;
     if (dateMode === 'month') {
@@ -49,82 +83,54 @@ const Reports = () => {
         end = customEnd ? new Date(customEnd + 'T23:59:59') : new Date();
     }
 
-    // Filtra Pedidos
     const filteredOrders = orders.filter(o => {
         const d = new Date(o.created_at);
         const matchDate = d >= start && d <= end;
-        const matchSeller = selectedSeller === 'all' || o.seller_id === selectedSeller;
-        const matchStatus = o.status === 'approved'; 
-        return matchDate && matchSeller && matchStatus;
+        const matchSeller = activeSeller === 'all' || o.seller_id === activeSeller;
+        return matchDate && matchSeller && o.status === 'approved';
     });
 
-    // Filtra Pagamentos (Brutos)
     const filteredPayments = payments.filter(p => {
         const originalOrder = orders.find(o => o.id === p.order_id);
         const referenceDate = originalOrder ? new Date(originalOrder.created_at) : new Date(p.date + 'T12:00:00');
         const matchDate = referenceDate >= start && referenceDate <= end;
-        const matchSeller = selectedSeller === 'all' || (originalOrder && originalOrder.seller_id === selectedSeller);
+        const matchSeller = activeSeller === 'all' || (originalOrder && originalOrder.seller_id === activeSeller);
         return matchDate && matchSeller;
     });
 
     return { orders: filteredOrders, payments: filteredPayments, startDate: start, endDate: end };
-  }, [orders, payments, selectedMonthStr, customStart, customEnd, dateMode, selectedSeller]);
+  }, [orders, payments, selectedMonthStr, customStart, customEnd, dateMode, activeSeller]);
 
-  // --- 2. LÓGICA DE AGRUPAMENTO (IGUAL AO HISTORY.JSX) ---
   const groupedPayments = useMemo(() => {
       const rawPayments = filteredData.payments;
-      // Ordena por data decrescente (igual ao History)
       const sortedPayments = [...rawPayments].sort((a, b) => new Date(b.date) - new Date(a.date));
-      
       const processedIds = new Set();
       const result = [];
 
       sortedPayments.forEach(p => {
           if (processedIds.has(p.id)) return;
-
-          // Mesma lógica do History: Agrupa se data, método, descrição e status de prova forem iguais
           const group = sortedPayments.filter(other => 
-              !processedIds.has(other.id) &&
-              other.date === p.date &&
-              other.method === p.method &&
-              other.description === p.description &&
-              other.has_proof === p.has_proof 
+              !processedIds.has(other.id) && other.date === p.date && other.method === p.method && other.description === p.description && other.has_proof === p.has_proof 
           );
 
           if (group.length > 1) {
               const totalAmount = group.reduce((acc, item) => acc + Number(item.amount), 0);
-              result.push({
-                  id: `group-${p.id}`,
-                  isGroup: true,
-                  items: group,
-                  amount: totalAmount,
-                  date: p.date,
-                  method: p.method,
-                  description: p.description,
-                  has_proof: p.has_proof
-              });
+              result.push({ id: `group-${p.id}`, isGroup: true, items: group, amount: totalAmount, date: p.date, method: p.method, description: p.description, has_proof: p.has_proof });
               group.forEach(item => processedIds.add(item.id));
           } else {
               result.push({ ...p, isGroup: false });
               processedIds.add(p.id);
           }
       });
-
       return result;
   }, [filteredData.payments]);
 
-  // --- ESTATÍSTICAS ---
   const stats = useMemo(() => {
     const totalSales = filteredData.orders.reduce((acc, o) => acc + (o.type === 'sale' ? Number(o.total) : 0), 0);
     const totalReturnsValue = filteredData.orders.reduce((acc, o) => acc + (o.type === 'return' ? Number(o.total) : 0), 0);
-    
-    // Total Recebido: Soma dos agrupados (deve dar o mesmo valor dos individuais, mas é mais seguro usar o agrupado para consistência visual)
     const totalReceived = groupedPayments.reduce((acc, p) => acc + Number(p.amount), 0);
-    
     const netSales = totalSales; 
-    const commission = netSales * 0.20;
 
-    // Ranking
     const productMap = {};
     filteredData.orders.forEach(o => {
         if (o.type === 'sale') {
@@ -140,114 +146,337 @@ const Reports = () => {
         .map(([name, data]) => ({ name, ...data }))
         .sort((a, b) => b.qty - a.qty);
 
-    return { totalSales, totalReturnsValue, netSales, totalReceived, commission, ranking: rankedProducts };
+    return { totalSales, totalReturnsValue, netSales, totalReceived, ranking: rankedProducts };
   }, [filteredData.orders, groupedPayments]);
 
-  // Listas auxiliares
+  const saldoAnterior = useMemo(() => {
+      if (activeSeller === 'all' || !settlements) return 0;
+      const pastSettlements = settlements.filter(s => s.seller_id === activeSeller && s.month < selectedMonthStr);
+      const pastPayouts = pastSettlements.reduce((acc, s) => acc + Number(s.final_payout || 0), 0);
+      const pastPaid = pastSettlements.reduce((acc, s) => acc + Number(s.amount_paid || 0), 0);
+      return pastPayouts - pastPaid;
+  }, [settlements, activeSeller, selectedMonthStr]);
+
+  const acertoPreview = useMemo(() => {
+      if (activeSeller === 'all' || dateMode !== 'month') return null;
+
+      const totalReceivedCash = filteredData.payments.filter(p => p.method !== 'Consumo').reduce((acc, p) => acc + Number(p.amount), 0);
+      const totalConsumed = filteredData.payments.filter(p => p.method === 'Consumo').reduce((acc, p) => acc + Number(p.amount), 0);
+      
+      const rate = Number(tempRate) || 0;
+      const commissionGross = totalReceivedCash * (rate / 100);
+      const discount = Number(extraDiscount) || 0;
+      
+      const finalPayoutMonth = commissionGross - totalConsumed - discount;
+      const totalToPay = finalPayoutMonth + saldoAnterior;
+
+      return { totalReceivedCash, totalConsumed, commissionGross, discount, finalPayoutMonth, totalToPay, rate };
+  }, [filteredData, activeSeller, dateMode, tempRate, extraDiscount, saldoAnterior]);
+
+  const currentSettlement = useMemo(() => {
+      if (!settlements || activeSeller === 'all') return null;
+      return settlements.find(s => s.seller_id === activeSeller && s.month === selectedMonthStr);
+  }, [settlements, activeSeller, selectedMonthStr]);
+
+  const discrepancyDetails = useMemo(() => {
+      if (!currentSettlement || !acertoPreview) return null;
+      
+      const diffSales = Math.abs(Number(currentSettlement.total_sales) - stats.totalSales);
+      const diffRec = Math.abs(Number(currentSettlement.total_received) - acertoPreview.totalReceivedCash);
+      const diffCons = Math.abs(Number(currentSettlement.total_consumed) - acertoPreview.totalConsumed);
+
+      if (diffSales > 0.01 || diffRec > 0.01 || diffCons > 0.01) {
+          const newGross = acertoPreview.totalReceivedCash * (Number(currentSettlement.commission_rate) / 100);
+          const newPayoutMonth = newGross - acertoPreview.totalConsumed - Number(currentSettlement.extra_discount);
+          return { needsUpdate: true, newGross, newPayoutMonth };
+      }
+      return { needsUpdate: false };
+  }, [currentSettlement, acertoPreview, stats.totalSales]);
+
   const sellersList = useMemo(() => {
     const unique = new Set();
     const list = [];
     orders.forEach(o => {
         if (o.seller_id && !unique.has(o.seller_id)) {
             unique.add(o.seller_id);
-            list.push({ id: o.seller_id, name: o.seller_name || 'Vendedor Desconhecido' });
+            list.push({ id: o.seller_id, name: o.seller_name || 'Vendedor' });
         }
     });
     return list;
   }, [orders]);
 
   const filteredSellers = sellersList.filter(s => s.name.toLowerCase().includes(sellerSearch.toLowerCase()));
-  const currentSellerName = selectedSeller === 'all' ? 'Todos os Vendedores' : sellersList.find(s => s.id === selectedSeller)?.name || 'Vendedor';
+  const currentSellerName = activeSeller === 'all' ? 'Todos os Vendedores' : sellersList.find(s => s.id === activeSeller)?.name || 'Vendedor';
 
-  // --- IMPRESSÃO TÉRMICA (USA OS AGRUPADOS) ---
+  const handleSaveSettlement = async () => {
+      if (!acertoPreview) return;
+      setIsSavingAcerto(true);
+      const payload = {
+          seller_id: activeSeller,
+          month: selectedMonthStr,
+          total_sales: stats.totalSales,
+          total_received: acertoPreview.totalReceivedCash,
+          commission_rate: Number(tempRate),
+          commission_gross: acertoPreview.commissionGross,
+          total_consumed: acertoPreview.totalConsumed,
+          extra_discount: acertoPreview.discount,
+          final_payout: acertoPreview.finalPayoutMonth,
+          amount_paid: 0,
+          payments_history: [],
+          status: acertoPreview.totalToPay <= 0 ? 'paid' : 'pending' 
+      };
+      
+      const { error } = await supabase.from('seller_settlements').insert([payload]);
+      if (error) alert("Erro ao salvar comissão.");
+      else {
+          setExtraDiscount(''); 
+          refreshData();
+      }
+      setIsSavingAcerto(false);
+  };
+
+  const handleUpdateSettlement = async () => {
+      if (!currentSettlement || !discrepancyDetails) return;
+      setIsSavingAcerto(true);
+
+      const newTotalToPay = discrepancyDetails.newPayoutMonth + saldoAnterior;
+      const newStatus = (currentSettlement.amount_paid || 0) >= newTotalToPay - 0.01 ? 'paid' : 'pending';
+
+      const { error } = await supabase.from('seller_settlements').update({
+          total_sales: stats.totalSales,
+          total_received: acertoPreview.totalReceivedCash,
+          commission_gross: discrepancyDetails.newGross,
+          total_consumed: acertoPreview.totalConsumed,
+          final_payout: discrepancyDetails.newPayoutMonth,
+          status: newStatus
+      }).eq('id', currentSettlement.id);
+
+      if (!error) refreshData();
+      else alert("Erro ao atualizar base da comissão.");
+      
+      setIsSavingAcerto(false);
+  };
+
+  const handleDeleteSettlement = async () => {
+      if (!currentSettlement) return;
+      if (!window.confirm("Tem certeza que deseja desfazer este fechamento? O histórico de pagamento de comissão deste mês será apagado para recalcular.")) return;
+      setIsSavingAcerto(true);
+      await supabase.from('seller_settlements').delete().eq('id', currentSettlement.id);
+      refreshData();
+      setExtraDiscount(''); 
+      setIsSavingAcerto(false);
+  };
+
+  const handleAddPayment = async () => {
+      if (!payAmount || Number(payAmount) <= 0) return;
+      setIsSavingAcerto(true);
+
+      let remaining = Number(payAmount);
+      const updates = [];
+
+      const pendingPast = settlements
+          .filter(s => s.seller_id === activeSeller && s.month <= selectedMonthStr && s.status !== 'paid')
+          .sort((a, b) => a.month.localeCompare(b.month)); 
+
+      for (let s of pendingPast) {
+          if (remaining <= 0) break;
+
+          const debt = Number(s.final_payout) - Number(s.amount_paid);
+          if (debt > 0) {
+              const applied = Math.min(remaining, debt);
+              remaining -= applied;
+
+              const newHistory = [...(s.payments_history || []), { id: Date.now().toString() + Math.random(), amount: applied, date: payDate }];
+              const newPaid = Number(s.amount_paid || 0) + applied;
+              const newStatus = newPaid >= Number(s.final_payout) - 0.01 ? 'paid' : 'pending';
+
+              updates.push({ id: s.id, payments_history: newHistory, amount_paid: newPaid, status: newStatus });
+          }
+      }
+
+      if (remaining > 0.01) {
+          const current = currentSettlement;
+          const existingUpdateIndex = updates.findIndex(u => u.id === current.id);
+          
+          if (existingUpdateIndex >= 0) {
+              updates[existingUpdateIndex].amount_paid += remaining;
+              const histLen = updates[existingUpdateIndex].payments_history.length;
+              updates[existingUpdateIndex].payments_history[histLen - 1].amount += remaining;
+          } else {
+              const newHistory = [...(current.payments_history || []), { id: Date.now().toString() + Math.random(), amount: remaining, date: payDate }];
+              const newPaid = Number(current.amount_paid || 0) + remaining;
+              updates.push({ id: current.id, payments_history: newHistory, amount_paid: newPaid, status: 'paid' }); 
+          }
+      }
+
+      for (let u of updates) {
+          await supabase.from('seller_settlements').update({
+              payments_history: u.payments_history,
+              amount_paid: u.amount_paid,
+              status: u.status
+          }).eq('id', u.id);
+      }
+
+      setShowPaymentForm(false);
+      setPayAmount('');
+      refreshData();
+      setIsSavingAcerto(false);
+  };
+
+  const handleRemovePayment = async (paymentIdToRemove) => {
+      if (!window.confirm("Excluir este pagamento?")) return;
+      setIsSavingAcerto(true);
+
+      const history = currentSettlement.payments_history || [];
+      const paymentToRemove = history.find(p => p.id === paymentIdToRemove);
+      if (!paymentToRemove) {
+          setIsSavingAcerto(false);
+          return;
+      }
+
+      // CORREÇÃO: Apenas remove o pagamento específico e diminui o amount_paid 
+      const newHistory = history.filter(p => p.id !== paymentIdToRemove);
+      const newAmountPaid = Math.max(0, Number(currentSettlement.amount_paid || 0) - Number(paymentToRemove.amount));
+      
+      const currentTotalToPay = Number(currentSettlement.final_payout) + saldoAnterior;
+      const newStatus = newAmountPaid >= currentTotalToPay - 0.01 ? 'paid' : 'pending';
+
+      await supabase.from('seller_settlements').update({
+          payments_history: newHistory,
+          amount_paid: newAmountPaid,
+          status: newStatus
+      }).eq('id', currentSettlement.id);
+
+      refreshData();
+      setIsSavingAcerto(false);
+  };
+
+  const handleShareHolerite = () => {
+      if (!currentSettlement) return;
+      
+      const paymentsText = (currentSettlement.payments_history || []).length > 0 
+          ? `\n\n💳 *Pagamentos Efetuados:*\n` + currentSettlement.payments_history.map(p => `• ${new Date(p.date).toLocaleDateString('pt-BR')}: ${formatBRL(p.amount)}`).join('\n')
+          : '';
+
+      const currentTotalToPay = Number(currentSettlement.final_payout) + saldoAnterior;
+      const remaining = currentTotalToPay - (currentSettlement.amount_paid || 0);
+
+      let saldoAntStr = '';
+      if (saldoAnterior > 0) saldoAntStr = `➕ Saldo Atrasado Anterior: ${formatBRL(saldoAnterior)}\n`;
+      else if (saldoAnterior < 0) saldoAntStr = `➖ Adiantamentos Anteriores: ${formatBRL(Math.abs(saldoAnterior))}\n`;
+
+      const text = `*COMISSÃO* 💰\n` +
+          `Vendedor: *${currentSellerName}*\n` +
+          `Período: *${selectedMonthStr}*\n\n` +
+          `📦 Total de Vendas: ${formatBRL(currentSettlement.total_sales)}\n` +
+          `💵 Vendas (Dinheiro/Pix): ${formatBRL(currentSettlement.total_received)}\n` +
+          `📊 Taxa de Comissão: ${currentSettlement.commission_rate}%\n` +
+          `➕ Comissão Bruta: ${formatBRL(currentSettlement.commission_gross)}\n` +
+          `➖ Consumo Próprio: ${formatBRL(currentSettlement.total_consumed)}\n` +
+          (currentSettlement.extra_discount > 0 ? `➖ Descontos Extras: ${formatBRL(currentSettlement.extra_discount)}\n` : '') +
+          `-----------------------------\n` +
+          `💰 *Líquido do Mês: ${formatBRL(currentSettlement.final_payout)}*\n` +
+          saldoAntStr +
+          `\n*TOTAL GERAL DEVIDO: ${formatBRL(Math.max(0, currentTotalToPay))}*` +
+          paymentsText +
+          `\n\n-----------------------------\n` +
+          `✅ *JÁ PAGO: ${formatBRL(currentSettlement.amount_paid || 0)}*\n` +
+          (remaining > 0 ? `⚠️ *FALTA PAGAR: ${formatBRL(remaining)}*\n` : `🎉 *CRÉDITO DE ADIANTAMENTO: ${formatBRL(Math.abs(remaining))}*\n`) +
+          `-----------------------------`;
+
+      const link = `https://wa.me/?text=${encodeURIComponent(text)}`;
+      window.open(link, '_blank');
+  };
+
+  const handlePrintHolerite = () => {
+      if (!currentSettlement) return;
+      
+      const remaining = Number(currentSettlement.final_payout) + saldoAnterior - (currentSettlement.amount_paid || 0);
+      
+      // Prepara os textos condicionais
+      let saldoAntStr = '';
+      if (saldoAnterior > 0) saldoAntStr = `<div class="row"><span>(+) Saldo Anterior:</span><span>${formatBRL(saldoAnterior)}</span></div>`;
+      else if (saldoAnterior < 0) saldoAntStr = `<div class="row"><span>(-) Adiantamentos:</span><span>${formatBRL(Math.abs(saldoAnterior))}</span></div>`;
+
+      const extraDiscountStr = currentSettlement.extra_discount > 0 
+          ? `<div class="row"><span>(-) Desc. Extra:</span><span>${formatBRL(currentSettlement.extra_discount)}</span></div>` 
+          : '';
+
+      // Chama o template passando os dados já formatados
+      const htmlContent = commissionTemplate({
+          currentSellerName,
+          selectedMonthStr,
+          totalSales: formatBRL(currentSettlement.total_sales),
+          totalReceived: formatBRL(currentSettlement.total_received),
+          commissionRate: currentSettlement.commission_rate,
+          commissionGross: formatBRL(currentSettlement.commission_gross),
+          totalConsumed: formatBRL(currentSettlement.total_consumed),
+          extraDiscountStr,
+          finalPayout: formatBRL(currentSettlement.final_payout),
+          saldoAntStr,
+          amountPaid: formatBRL(currentSettlement.amount_paid || 0),
+          remainingLabel: remaining > 0 ? 'FALTA PAGAR' : 'CRÉDITO',
+          remainingStr: formatBRL(Math.abs(remaining))
+      });
+
+      // Usa a mesma função padrão do sistema para abrir e imprimir
+      executePrint(htmlContent);
+  };
+
   const generateThermalReport = () => {
-    const periodStr = dateMode === 'month' 
-        ? `${monthsList[Number(selectedMonthStr.split('-')[1])-1]}/${selectedMonthStr.split('-')[0]}` 
-        : `${new Date(customStart).toLocaleDateString()} a ${new Date(customEnd).toLocaleDateString()}`;
-
-    const ordersFormatted = filteredData.orders.map(o => ({
-        date: new Date(o.created_at).toLocaleDateString(),
-        desc: `#${o.id.slice(0,4)}`,
-        value: `${o.type === 'return' ? '-' : ''}${formatBRL(o.total)}`
-    }));
-
-    // Usa 'groupedPayments' para o relatório impresso
-    const paymentsFormatted = groupedPayments.map(p => ({
-        date: new Date(p.date).toLocaleDateString(),
-        desc: p.isGroup ? `${p.method} (Lote)` : p.method, // Mostra "(Lote)" se for agrupado
-        value: formatBRL(p.amount)
-    }));
-
-    const templateStats = {
-        netSales: formatBRL(stats.netSales),
-        commission: formatBRL(stats.commission),
-        totalReceived: formatBRL(stats.totalReceived)
-    };
-
-    const htmlContent = reportTemplate({
-        periodStr,
-        currentSellerName,
-        stats: templateStats,
-        orders: ordersFormatted,      
-        payments: paymentsFormatted, 
-        reportType: reportType
-    });
-
+    const periodStr = dateMode === 'month' ? `${monthsList[Number(selectedMonthStr.split('-')[1])-1]}/${selectedMonthStr.split('-')[0]}` : `${new Date(customStart).toLocaleDateString()} a ${new Date(customEnd).toLocaleDateString()}`;
+    const ordersFormatted = filteredData.orders.map(o => ({ date: new Date(o.created_at).toLocaleDateString(), desc: `#${o.id.slice(0,4)}`, value: `${o.type === 'return' ? '-' : ''}${formatBRL(o.total)}` }));
+    const paymentsFormatted = groupedPayments.map(p => ({ date: new Date(p.date).toLocaleDateString(), desc: p.isGroup ? `${p.method} (Lote)` : p.method, value: formatBRL(p.amount) }));
+    const templateStats = { netSales: formatBRL(stats.netSales), commission: formatBRL(acertoPreview ? acertoPreview.commissionGross : 0), totalReceived: formatBRL(stats.totalReceived) };
+    const htmlContent = reportTemplate({ periodStr, currentSellerName, stats: templateStats, orders: ordersFormatted, payments: paymentsFormatted, reportType });
     executePrint(htmlContent);
   };
 
   return (
     <div className="p-6 pb-24 space-y-6 animate-in fade-in font-bold min-h-screen bg-slate-50 print:bg-white print:p-0">
       
-      {/* CABEÇALHO */}
       <div className="flex items-center justify-between print:hidden">
         <div className="flex items-center gap-3">
-            <button onClick={() => navigate('/')} className="p-3 bg-white rounded-2xl shadow-sm"><ArrowLeft size={20}/></button>
+            <button onClick={() => navigate(isAdmin ? '/' : '/dashboard')} className="p-3 bg-white rounded-2xl shadow-sm"><ArrowLeft size={20}/></button>
             <h2 className="text-xl font-black text-slate-800 uppercase">Relatórios</h2>
         </div>
-        <button onClick={generateThermalReport} className="p-3 bg-indigo-50 text-indigo-600 rounded-2xl shadow-sm active:scale-90">
-            <Printer size={20}/>
-        </button>
+        {isAdmin && (
+            <button onClick={generateThermalReport} className="p-3 bg-indigo-50 text-indigo-600 rounded-2xl shadow-sm active:scale-90" title="Imprimir Relatório de Vendas">
+                <Printer size={20}/>
+            </button>
+        )}
       </div>
 
-      {/* ÁREA DE FILTROS */}
       <div className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-50 space-y-4 print:hidden">
-        
-        {/* Vendedor e Período */}
         <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1">
                 <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Período</label>
                 <div className="flex bg-slate-50 p-1 rounded-xl">
                     <button onClick={() => setDateMode('month')} className={`flex-1 py-2 rounded-lg text-xs font-bold ${dateMode === 'month' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-400'}`}>Mês</button>
-                    <button onClick={() => setDateMode('custom')} className={`flex-1 py-2 rounded-lg text-xs font-bold ${dateMode === 'custom' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-400'}`}>Data</button>
+                    {isAdmin && <button onClick={() => setDateMode('custom')} className={`flex-1 py-2 rounded-lg text-xs font-bold ${dateMode === 'custom' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-400'}`}>Data</button>}
                 </div>
             </div>
             
             <div className="space-y-1">
                 <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Vendedor</label>
                 <div className="relative">
-                    <button 
-                        onClick={() => setShowSellerDropdown(!showSellerDropdown)}
-                        className="w-full p-3.5 bg-slate-50 rounded-2xl flex justify-between items-center text-left"
-                    >
-                        <span className={`font-bold text-xs truncate ${selectedSeller === 'all' ? 'text-slate-400' : 'text-slate-800'}`}>
-                            {selectedSeller === 'all' ? 'Todos' : currentSellerName}
-                        </span>
-                        <Search size={14} className="text-slate-400 flex-shrink-0"/>
-                    </button>
+                    {isAdmin ? (
+                        <button onClick={() => setShowSellerDropdown(!showSellerDropdown)} className="w-full p-3.5 bg-slate-50 rounded-2xl flex justify-between items-center text-left">
+                            <span className={`font-bold text-xs truncate ${activeSeller === 'all' ? 'text-slate-400' : 'text-slate-800'}`}>{activeSeller === 'all' ? 'Todos' : currentSellerName}</span>
+                            <Search size={14} className="text-slate-400 flex-shrink-0"/>
+                        </button>
+                    ) : (
+                        <div className="w-full p-3.5 bg-slate-50 rounded-2xl flex justify-between items-center text-left">
+                            <span className="font-bold text-xs text-indigo-600 truncate">{currentSellerName}</span>
+                        </div>
+                    )}
 
-                    {showSellerDropdown && (
+                    {showSellerDropdown && isAdmin && (
                         <div className="absolute top-full left-0 right-0 mt-2 bg-white rounded-2xl shadow-xl border border-slate-100 z-50 p-2 max-h-60 overflow-y-auto">
-                            <input 
-                                className="w-full p-3 bg-slate-50 rounded-xl font-bold text-sm mb-2 outline-none"
-                                placeholder="Buscar..."
-                                value={sellerSearch}
-                                onChange={e => setSellerSearch(e.target.value)}
-                                autoFocus
-                            />
-                            <button onClick={() => { setSelectedSeller('all'); setShowSellerDropdown(false); setSellerSearch(''); }} className="w-full p-3 rounded-xl text-left font-bold text-slate-500 hover:bg-slate-50">Todos</button>
+                            <input className="w-full p-3 bg-slate-50 rounded-xl font-bold text-sm mb-2 outline-none" placeholder="Buscar..." value={sellerSearch} onChange={e => setSellerSearch(e.target.value)} autoFocus />
+                            <button onClick={() => { setSelectedSellerState('all'); setShowSellerDropdown(false); setSellerSearch(''); }} className="w-full p-3 rounded-xl text-left font-bold text-slate-500 hover:bg-slate-50">Todos</button>
                             {filteredSellers.map(s => (
-                                <button key={s.id} onClick={() => { setSelectedSeller(s.id); setShowSellerDropdown(false); setSellerSearch(''); }} className="w-full p-3 rounded-xl text-left font-bold text-slate-800 hover:bg-yellow-50">{s.name}</button>
+                                <button key={s.id} onClick={() => { setSelectedSellerState(s.id); setShowSellerDropdown(false); setSellerSearch(''); }} className="w-full p-3 rounded-xl text-left font-bold text-slate-800 hover:bg-yellow-50">{s.name}</button>
                             ))}
                         </div>
                     )}
@@ -255,7 +484,6 @@ const Reports = () => {
             </div>
         </div>
 
-        {/* Seleção de Datas */}
         {dateMode === 'month' ? (
             <div className="relative">
                 <button onClick={() => setShowMonthPicker(!showMonthPicker)} className="w-full p-4 bg-slate-50 rounded-2xl font-bold text-slate-800 flex justify-between items-center">
@@ -287,28 +515,217 @@ const Reports = () => {
             </div>
         )}
 
-        {/* Filtro de Tipo */}
         <div className="flex gap-2">
             {['orders', 'payments', 'full'].map(type => (
-                <button 
-                    key={type}
-                    onClick={() => setReportType(type)}
-                    className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase border-2 transition-all ${reportType === type ? 'border-yellow-400 bg-yellow-50 text-yellow-700' : 'border-slate-50 bg-slate-50 text-slate-400'}`}
-                >
+                <button key={type} onClick={() => setReportType(type)} className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase border-2 transition-all ${reportType === type ? 'border-yellow-400 bg-yellow-50 text-yellow-700' : 'border-slate-50 bg-slate-50 text-slate-400'}`}>
                     {type === 'orders' ? 'Vendas' : type === 'payments' ? 'Pagamentos' : 'Completo'}
                 </button>
             ))}
         </div>
       </div>
 
-      {/* --- CARDS DE TOTAIS --- */}
+      {dateMode === 'month' && activeSeller !== 'all' && acertoPreview && (
+          <div className="mb-6">
+              {currentSettlement ? (
+                  <div className="bg-slate-800 text-white p-6 rounded-[2.5rem] space-y-4 shadow-xl relative overflow-hidden">
+                      <div className="absolute -right-4 -top-4 bg-white/5 w-24 h-24 rounded-full blur-xl"></div>
+                      
+                      <div className="flex justify-between items-center relative z-10">
+                          <p className="text-slate-300 font-black uppercase text-xs tracking-widest flex items-center gap-2">
+                              <FileText size={16}/> Resumo da Comissão
+                          </p>
+                          <span className={`px-2 py-1 rounded text-[10px] font-black uppercase shadow-sm ${currentSettlement.status === 'paid' ? 'bg-emerald-500 text-white' : 'bg-amber-400 text-slate-900'}`}>
+                              {currentSettlement.status === 'paid' ? 'Quitado' : 'Pendente'}
+                          </span>
+                      </div>
+
+                      {discrepancyDetails?.needsUpdate && (
+                          <div className="relative z-10 bg-rose-500/20 border border-rose-400 p-4 rounded-2xl space-y-3 mt-2 shadow-inner">
+                              <div className="flex items-start gap-2">
+                                  <AlertTriangle size={20} className="text-rose-400 flex-shrink-0 mt-0.5"/>
+                                  <div>
+                                      <p className="text-[11px] text-rose-200 leading-tight font-bold">
+                                          ATENÇÃO: Houve novos pedidos ou pagamentos deste vendedor após o fechamento. O valor real da comissão mudou.
+                                      </p>
+                                  </div>
+                              </div>
+                              {isAdmin && (
+                                  <button onClick={handleUpdateSettlement} disabled={isSavingAcerto} className="w-full py-3 bg-rose-500 hover:bg-rose-600 text-white rounded-xl font-black uppercase text-[10px] flex items-center justify-center gap-2 transition-colors">
+                                      {isSavingAcerto ? <Loader2 size={14} className="animate-spin"/> : <RefreshCw size={14}/>} Atualizar Valores Base (Preserva os Pagamentos)
+                                  </button>
+                              )}
+                          </div>
+                      )}
+                      
+                      <div className="space-y-1 mt-4 relative z-10 opacity-90">
+                          <div className="flex justify-between text-xs font-bold text-slate-400"><span>Vendas Dinheiro/Pix:</span> <span>{formatBRL(currentSettlement.total_received)}</span></div>
+                          <div className="flex justify-between text-xs font-black text-yellow-400 pt-1"><span>Comissão Bruta ({currentSettlement.commission_rate}%):</span> <span>{formatBRL(currentSettlement.commission_gross)}</span></div>
+                          <div className="flex justify-between text-xs font-bold pt-1 text-slate-300"><span>(-) Consumo Próprio:</span> <span>{formatBRL(currentSettlement.total_consumed)}</span></div>
+                          {currentSettlement.extra_discount > 0 && <div className="flex justify-between text-xs font-bold text-slate-300"><span>(-) Descontos Extras:</span> <span>{formatBRL(currentSettlement.extra_discount)}</span></div>}
+                          
+                          <div className="flex justify-between font-bold text-slate-100 bg-white/10 p-2 mt-1 rounded-lg">
+                              <span className="text-xs uppercase">Líquido do Mês:</span> <span className="font-mono">{formatBRL(currentSettlement.final_payout)}</span>
+                          </div>
+
+                          {saldoAnterior > 0 && (
+                              <div className="flex justify-between text-xs text-amber-400 font-bold mt-2">
+                                  <span>(+) Saldo Atrasado Anterior:</span>
+                                  <span className="font-mono">{formatBRL(saldoAnterior)}</span>
+                              </div>
+                          )}
+                          {saldoAnterior < 0 && (
+                              <div className="flex justify-between text-xs text-red-400 font-bold mt-2">
+                                  <span>(-) Adiantamentos Anteriores:</span>
+                                  <span className="font-mono">{formatBRL(Math.abs(saldoAnterior))}</span>
+                              </div>
+                          )}
+
+                          <div className="border-t border-slate-600 mt-3 pt-3 flex justify-between items-center">
+                              <span className="font-black uppercase text-slate-300 text-[10px]">Total de Direito:</span>
+                              <span className="font-mono text-xl font-black text-white">{formatBRL(Math.max(0, Number(currentSettlement.final_payout) + saldoAnterior))}</span>
+                          </div>
+                      </div>
+
+                      <div className="bg-white text-slate-800 rounded-3xl p-5 relative z-10 space-y-3 mt-4">
+                          <div className="flex justify-between items-center">
+                              <h4 className="text-xs font-black uppercase text-slate-400">Pagamentos Efetuados</h4>
+                              {isAdmin && currentSettlement.status !== 'paid' && (
+                                  <button onClick={() => setShowPaymentForm(!showPaymentForm)} className="px-3 py-1.5 bg-green-100 text-green-700 rounded-xl text-[10px] font-black uppercase flex items-center gap-1 active:scale-90 transition-all">
+                                      {showPaymentForm ? <X size={12}/> : <Plus size={12}/>} {showPaymentForm ? 'Fechar' : 'Adicionar'}
+                                  </button>
+                              )}
+                          </div>
+
+                          {showPaymentForm && isAdmin && (
+                              <div className="bg-slate-50 p-3 rounded-2xl flex flex-col gap-2 border border-slate-200 animate-in slide-in-from-top-2">
+                                  <div className="flex gap-2 w-full">
+                                      <input type="date" className="w-1/3 min-w-0 p-3 bg-white rounded-xl text-xs font-bold outline-none border border-slate-100" value={payDate} onChange={e => setPayDate(e.target.value)} />
+                                      <input type="number" className="flex-1 min-w-0 p-3 bg-white rounded-xl text-sm font-bold outline-none border border-slate-100 focus:border-green-400" placeholder="R$ Valor" value={payAmount} onChange={e => setPayAmount(e.target.value)} />
+                                  </div>
+                                  <button onClick={handleAddPayment} disabled={isSavingAcerto} className="w-full p-3 bg-green-500 text-white rounded-xl font-black uppercase text-xs flex justify-center items-center gap-2 active:scale-95 transition-transform">
+                                      {isSavingAcerto ? <Loader2 size={16} className="animate-spin"/> : <><CheckCircle2 size={16}/> Confirmar Pagamento</>}
+                                  </button>
+                              </div>
+                          )}
+
+                          <div className="space-y-2">
+                              {(currentSettlement.payments_history || []).length === 0 && <p className="text-[10px] text-slate-400 font-bold italic text-center py-2">Nenhum pagamento registrado.</p>}
+                              
+                              {(currentSettlement.payments_history || []).map(p => (
+                                  <div key={p.id} className="flex justify-between items-center p-2 bg-slate-50 rounded-xl border border-slate-100">
+                                      <div className="flex items-center gap-2">
+                                          <div className="w-6 h-6 bg-green-100 text-green-600 rounded-full flex items-center justify-center"><DollarSign size={12}/></div>
+                                          <span className="text-xs font-bold text-slate-600">{new Date(p.date).toLocaleDateString()}</span>
+                                      </div>
+                                      <div className="flex items-center gap-3">
+                                          <span className="font-mono font-black text-green-600">{formatBRL(p.amount)}</span>
+                                          {isAdmin && <button onClick={() => handleRemovePayment(p.id)} className="text-red-300 hover:text-red-500 p-1"><Trash2 size={14}/></button>}
+                                      </div>
+                                  </div>
+                              ))}
+                          </div>
+
+                          <div className="flex justify-between items-center pt-3 border-t border-slate-100">
+                              <span className="font-black uppercase text-[10px] text-slate-400">
+                                  {(Number(currentSettlement.final_payout) + saldoAnterior - (currentSettlement.amount_paid || 0)) < -0.01 ? 'Crédito (Adiantamento)' : 'Falta Pagar'}
+                              </span>
+                              <span className={`font-mono text-xl font-black ${currentSettlement.status === 'paid' ? 'text-green-500' : 'text-red-500'}`}>
+                                  {formatBRL(Math.abs(Number(currentSettlement.final_payout) + saldoAnterior - (currentSettlement.amount_paid || 0)))}
+                              </span>
+                          </div>
+                      </div>
+
+                      <div className="flex gap-2 pt-2 relative z-10">
+                          {isAdmin && (
+                              <button onClick={handleDeleteSettlement} disabled={isSavingAcerto} className="p-3 bg-white/10 text-red-300 rounded-2xl active:scale-95 transition-transform" title="Desfazer Fechamento do Mês">
+                                  {isSavingAcerto ? <Loader2 className="animate-spin" size={20}/> : <Trash2 size={20}/>}
+                              </button>
+                          )}
+                          {isAdmin && (
+                              <button onClick={handlePrintHolerite} className="p-3 bg-white text-slate-900 rounded-2xl active:scale-95 transition-transform" title="Imprimir Recibo com Assinatura">
+                                  <Printer size={20}/>
+                              </button>
+                          )}
+                          <button onClick={handleShareHolerite} className="flex-1 py-3 bg-white text-slate-900 rounded-2xl font-black uppercase text-xs flex items-center justify-center gap-2 active:scale-95 shadow-md">
+                              <Share2 size={16}/> {isAdmin ? 'Enviar para Vendedor' : 'Compartilhar'}
+                          </button>
+                      </div>
+                  </div>
+              ) : (
+                  <div className="bg-white border-2 border-indigo-100 p-6 rounded-[2.5rem] space-y-4 shadow-lg shadow-indigo-50">
+                      <div className="flex justify-between items-center">
+                          <p className="text-indigo-600 font-black uppercase text-xs tracking-widest flex items-center gap-2"><Calculator size={16}/> Prévia da Comissão</p>
+                          <span className="px-2 py-1 bg-slate-100 text-slate-500 rounded text-[10px] font-black uppercase">Não Fechado</span>
+                      </div>
+
+                      <div className="space-y-2 text-xs">
+                          <div className="flex justify-between font-bold text-slate-500"><span>Vendas Dinheiro/Pix:</span> <span className="font-mono">{formatBRL(acertoPreview.totalReceivedCash)}</span></div>
+                          <div className="flex justify-between font-black text-indigo-600 bg-indigo-50 p-2 rounded-lg">
+                              <span>Comissão Bruta ({tempRate}%):</span> <span className="font-mono">{formatBRL(acertoPreview.commissionGross)}</span>
+                          </div>
+                          <div className="flex justify-between font-bold text-red-500"><span>(-) Consumo Próprio:</span> <span className="font-mono">{formatBRL(acertoPreview.totalConsumed)}</span></div>
+                          
+                          {!isAdmin && acertoPreview.discount > 0 && (
+                              <div className="flex justify-between font-bold text-red-500 text-xs"><span>(-) Descontos Extras:</span> <span className="font-mono">{formatBRL(acertoPreview.discount)}</span></div>
+                          )}
+
+                          <div className="flex justify-between font-bold text-slate-800 bg-slate-100 p-2 mt-1 rounded-lg">
+                              <span>Líquido do Mês:</span> <span className="font-mono">{formatBRL(acertoPreview.finalPayoutMonth)}</span>
+                          </div>
+
+                          {saldoAnterior > 0 && (
+                              <div className="flex justify-between text-xs text-amber-600 font-bold mt-2">
+                                  <span>(+) Saldo Atrasado Anterior:</span>
+                                  <span className="font-mono">{formatBRL(saldoAnterior)}</span>
+                              </div>
+                          )}
+                          {saldoAnterior < 0 && (
+                              <div className="flex justify-between text-xs text-red-500 font-bold mt-2">
+                                  <span>(-) Adiantamentos Anteriores:</span>
+                                  <span className="font-mono">{formatBRL(Math.abs(saldoAnterior))}</span>
+                              </div>
+                          )}
+                      </div>
+
+                      {isAdmin && (
+                          <div className="space-y-3 pt-3 border-t border-slate-100">
+                              <div className="flex gap-2">
+                                  <div className="flex-1 space-y-1">
+                                      <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Taxa (%)</label>
+                                      <input type="number" className="w-full p-3 bg-slate-50 rounded-xl font-bold outline-none" value={tempRate} onChange={e => setTempRate(e.target.value)} />
+                                  </div>
+                                  <div className="flex-1 space-y-1">
+                                      <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Desconto Extra (R$)</label>
+                                      <input type="number" className="w-full p-3 bg-slate-50 rounded-xl font-bold outline-none focus:border-red-400 border border-transparent" value={extraDiscount} onChange={e => setExtraDiscount(e.target.value)} placeholder="0,00"/>
+                                  </div>
+                              </div>
+                          </div>
+                      )}
+
+                      <div className="bg-slate-50 p-4 rounded-2xl flex justify-between items-center border border-slate-100 mt-2">
+                          <span className="font-black text-slate-800 uppercase text-[10px] w-20">Total a Pagar</span>
+                          <span className="font-mono text-3xl font-black text-slate-800">{formatBRL(Math.max(0, acertoPreview.totalToPay))}</span>
+                      </div>
+
+                      {isAdmin ? (
+                          <button onClick={handleSaveSettlement} disabled={isSavingAcerto} className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase text-xs flex items-center justify-center gap-2 active:scale-95 transition-transform shadow-lg mt-2">
+                              {isSavingAcerto ? <Loader2 className="animate-spin" size={18}/> : <Save size={18}/>} Fechar Mês & Iniciar Acerto
+                          </button>
+                      ) : (
+                          <p className="text-center text-[10px] font-bold text-slate-400 uppercase mt-2">Aguardando fechamento do administrador para este mês.</p>
+                      )}
+                  </div>
+              )}
+          </div>
+      )}
+
       <div className="space-y-3 print:hidden">
         {(reportType === 'full' || reportType === 'orders') && (
-            <div className="bg-gradient-to-r from-green-500 to-emerald-600 p-6 rounded-[2.5rem] text-white shadow-lg shadow-green-100 relative overflow-hidden">
-                <div className="absolute -right-4 -top-4 bg-white/20 w-24 h-24 rounded-full blur-xl"></div>
+            <div className="bg-gradient-to-r from-slate-800 to-slate-900 p-6 rounded-[2.5rem] text-white shadow-lg relative overflow-hidden">
+                <div className="absolute -right-4 -top-4 bg-white/10 w-24 h-24 rounded-full blur-xl"></div>
                 <div className="flex justify-between items-start relative z-10">
                     <div>
-                        <p className="text-[10px] font-black uppercase tracking-widest opacity-80 mb-1">Vendas Líquidas</p>
+                        <p className="text-[10px] font-black uppercase tracking-widest opacity-80 mb-1">Vendas Totais do Período</p>
                         <p className="text-3xl font-black font-mono tracking-tighter">{formatBRL(stats.netSales)}</p>
                         <p className="text-xs font-bold mt-1 opacity-90">{filteredData.orders.length} pedidos realizados</p>
                     </div>
@@ -320,24 +737,17 @@ const Reports = () => {
         {(reportType === 'full' || reportType === 'payments') && (
             <div className="flex gap-3">
                 <div className="flex-1 bg-white p-5 rounded-[2.5rem] border border-slate-100 shadow-sm">
-                    <p className="text-[9px] text-slate-400 font-black uppercase tracking-widest mb-1">Total Recebido</p>
+                    <p className="text-[9px] text-slate-400 font-black uppercase tracking-widest mb-1">Total Recebido (Caixa)</p>
                     <p className="text-xl font-black text-slate-800 font-mono tracking-tighter">{formatBRL(stats.totalReceived)}</p>
-                </div>
-                {/* COMISSÃO EM DESTAQUE */}
-                <div className="flex-1 bg-indigo-600 p-5 rounded-[2.5rem] text-white shadow-lg shadow-indigo-100">
-                    <p className="text-[9px] font-black uppercase tracking-widest opacity-80 mb-1">Comissão (20%)</p>
-                    <p className="text-xl font-black font-mono tracking-tighter">{formatBRL(stats.commission)}</p>
                 </div>
             </div>
         )}
       </div>
 
-      {/* --- RANKING DE PRODUTOS --- */}
       {(reportType !== 'payments' && stats.ranking.length > 0) && (
           <div className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-50 space-y-4 print:hidden">
             <h3 className="text-sm font-black text-slate-800 uppercase flex items-center gap-2"><PieChart size={16}/> Desempenho</h3>
             
-            {/* Top 1 */}
             <div className="flex items-center gap-3">
                 <div className="w-8 h-8 rounded-full bg-green-100 text-green-600 flex items-center justify-center font-black text-xs">1º</div>
                 <div className="flex-1">
@@ -351,7 +761,6 @@ const Reports = () => {
                 </div>
             </div>
 
-            {/* Lista Expandida */}
             {expandRanking && stats.ranking.slice(1, -1).map((prod, idx) => (
                 <div key={prod.name} className="flex items-center gap-3 animate-in fade-in">
                     <div className="w-8 text-center font-bold text-xs text-slate-300">#{idx + 2}</div>
@@ -367,7 +776,6 @@ const Reports = () => {
                 </div>
             ))}
 
-            {/* Último */}
             {stats.ranking.length > 1 && (
                 <div className="flex items-center gap-3">
                     <div className="w-8 h-8 rounded-full bg-red-50 text-red-400 flex items-center justify-center font-black text-xs">▼</div>
@@ -383,12 +791,8 @@ const Reports = () => {
                 </div>
             )}
 
-            {/* Botão Expandir */}
             {stats.ranking.length > 2 && (
-                <button 
-                    onClick={() => setExpandRanking(!expandRanking)}
-                    className="w-full py-3 bg-slate-50 text-slate-400 rounded-xl text-[10px] font-black uppercase flex items-center justify-center gap-1 active:bg-slate-100"
-                >
+                <button onClick={() => setExpandRanking(!expandRanking)} className="w-full py-3 bg-slate-50 text-slate-400 rounded-xl text-[10px] font-black uppercase flex items-center justify-center gap-1 active:bg-slate-100">
                     {expandRanking ? <ChevronUp size={14}/> : <ChevronDown size={14}/>}
                     {expandRanking ? 'Recolher Ranking' : `Ver mais ${stats.ranking.length - 2} produtos`}
                 </button>
@@ -396,11 +800,9 @@ const Reports = () => {
           </div>
       )}
 
-      {/* --- EXTRATO DETALHADO --- */}
       <div className="space-y-4 pt-4 border-t border-slate-100 print:border-black">
         <h3 className="text-sm font-black text-slate-800 print:text-black uppercase ml-2 flex items-center gap-2"><FileText size={16}/> Extrato Detalhado</h3>
         
-        {/* LISTA DE PEDIDOS */}
         {(reportType !== 'payments') && filteredData.orders.map(o => (
             <div key={o.id} className="bg-white p-4 rounded-[1.5rem] border border-slate-50 flex justify-between items-center text-xs shadow-sm">
                 <div>
@@ -418,7 +820,6 @@ const Reports = () => {
             </div>
         ))}
 
-        {/* LISTA DE PAGAMENTOS (USANDO GROUPED PAYMENTS AGORA) */}
         {(reportType !== 'orders') && groupedPayments.map((p, idx) => (
             <div key={p.id || idx} className="bg-white p-4 rounded-[1.5rem] border border-green-50 flex justify-between items-center text-xs shadow-sm">
                 <div>

@@ -11,9 +11,11 @@ export const DataProvider = ({ children }) => {
   const [products, setProducts] = useState([]);
   const [orders, setOrders] = useState([]);
   const [payments, setPayments] = useState([]);
-  
   const [customers, setCustomers] = useState([]);
   const [customerTransactions, setCustomerTransactions] = useState([]);
+  
+  // NOVO ESTADO: Acertos de Comissão
+  const [settlements, setSettlements] = useState([]);
   
   const [loading, setLoading] = useState(true);
 
@@ -26,7 +28,7 @@ export const DataProvider = ({ children }) => {
         const { data: prodData } = await supabase.from('products').select('*').order('name');
         if (prodData) setProducts(prodData);
 
-        // Pedidos (Aumentado para 5000 para você não perder histórico de vendas antigas)
+        // Pedidos
         const { data: orderData } = await supabase
             .from('orders')
             .select('*, order_items(*)')
@@ -34,9 +36,7 @@ export const DataProvider = ({ children }) => {
             .limit(5000); 
         if (orderData) setOrders(orderData);
 
-        // Pagamentos (Aumentado para 5000)
-        // NÃO selecionamos a coluna 'proof'. Selecionamos 'has_proof'.
-        // Isso reduz o tamanho do download de MBs para KBs.
+        // Pagamentos
         const { data: payData } = await supabase
             .from('payments')
             .select('id, amount, date, method, description, status, order_id, approver_name, has_proof') 
@@ -48,13 +48,20 @@ export const DataProvider = ({ children }) => {
         const { data: custData } = await supabase.from('customers').select('*').order('name');
         if (custData) setCustomers(custData);
 
-        // Transações de Fiado (MUDANÇA CRÍTICA: Aumentado para 10000 para o saldo NUNCA quebrar)
+        // Transações
         const { data: transData } = await supabase
             .from('customer_transactions')
             .select('*')
             .order('date', { ascending: false })
             .limit(10000);
         if (transData) setCustomerTransactions(transData);
+
+        // NOVO: Acertos de Comissão
+        const { data: settlementData } = await supabase
+            .from('seller_settlements')
+            .select('*')
+            .order('month', { ascending: false });
+        if (settlementData) setSettlements(settlementData);
 
     } catch (error) {
         console.error("Erro ao carregar dados:", error);
@@ -74,6 +81,7 @@ export const DataProvider = ({ children }) => {
         payments, 
         customers, 
         customerTransactions, 
+        settlements, // <--- ADICIONADO AQUI
         refreshData, 
         loading 
     }}>

@@ -1,8 +1,9 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { TrendingUp, Plus, Wallet, Users } from 'lucide-react'; 
+import { TrendingUp, Plus, Wallet, Users, PieChart } from 'lucide-react'; 
 import { useData } from '../../contexts/DataContext';
 import { useAuth } from '../../contexts/AuthContext';
+import { supabase } from '../../services/supabase';
 import { formatBRL } from '../../utils/formatters';
 import BulkPaymentModal from '../../components/modals/BulkPaymentModal';
 
@@ -11,6 +12,18 @@ const SellerDashboard = () => {
   const { session } = useAuth();
   const navigate = useNavigate();
   const [showPayModal, setShowPayModal] = useState(false);
+  
+  // Verifica se o vendedor tem taxa de comissão cadastrada
+  const [commissionRate, setCommissionRate] = useState(0);
+
+  useEffect(() => {
+      if (session?.user?.id) {
+          supabase.from('profiles').select('commission_rate').eq('id', session.user.id).single()
+              .then(({data}) => {
+                  if (data) setCommissionRate(Number(data.commission_rate || 0));
+              });
+      }
+  }, [session]);
 
   const myOrders = useMemo(() => orders.filter(o => o.seller_id === session?.user?.id), [orders, session]);
 
@@ -38,38 +51,27 @@ const SellerDashboard = () => {
         <BulkPaymentModal 
             orders={myOrders} 
             onClose={() => setShowPayModal(false)} 
-            onConfirm={refreshData} // Passa a função de atualização
+            onConfirm={refreshData} 
         />
       )}
 
       {/* Card Principal: Minhas Vendas Pendentes (Dívida) */}
       <div className="bg-slate-900 p-8 rounded-[3.5rem] text-white space-y-4 shadow-xl relative border-b-8 border-yellow-400">
         <div className="flex justify-between items-start gap-4">
-          
           <div className="flex-1 min-w-0">
-            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest text-left">
-              Minhas Vendas Pendentes
-            </p>
-
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest text-left">Minhas Vendas Pendentes</p>
             <h3 className="font-black text-yellow-400 font-mono tracking-tighter text-3xl sm:text-4xl md:text-5xl truncate" title={formatBRL(debt)}>
               {formatBRL(debt)}
             </h3>
           </div>
-
           <div className="p-3 bg-white/10 rounded-full text-yellow-400 flex-shrink-0">
             <Wallet size={24} />
           </div>
-
         </div>
 
         <div className="flex gap-2 pt-2">
-          <button onClick={() => navigate('/historico')} className="flex-1 py-4 bg-white/10 text-white rounded-2xl font-black text-xs uppercase active:scale-95">
-            Ver Pedidos
-          </button>
-
-          <button onClick={() => setShowPayModal(true)} className="flex-1 py-4 bg-yellow-400 text-slate-900 rounded-2xl font-black text-xs uppercase active:scale-95 shadow-lg">
-            Pagar Saldo
-          </button>
+          <button onClick={() => navigate('/historico')} className="flex-1 py-4 bg-white/10 text-white rounded-2xl font-black text-xs uppercase active:scale-95">Ver Pedidos</button>
+          <button onClick={() => setShowPayModal(true)} className="flex-1 py-4 bg-yellow-400 text-slate-900 rounded-2xl font-black text-xs uppercase active:scale-95 shadow-lg">Pagar Saldo</button>
         </div>
       </div>
 
@@ -84,6 +86,9 @@ const SellerDashboard = () => {
 
       {/* Ações */}
       <div className="grid grid-cols-1 gap-4">
+        
+        
+
         <button onClick={() => navigate('/catalogo')} className="p-6 bg-white border-2 border-slate-50 rounded-[2.5rem] flex items-center gap-4 shadow-sm active:bg-slate-100 text-left transition-all">
           <div className="p-4 bg-yellow-100 text-yellow-600 rounded-2xl shadow-inner"><Plus size={24}/></div>
           <div><p className="font-black text-slate-800 leading-tight">Solicitar Produtos</p><p className="text-[10px] text-slate-400 uppercase font-bold">Nova Retirada</p></div>
@@ -93,6 +98,17 @@ const SellerDashboard = () => {
           <div className="p-4 bg-indigo-100 text-indigo-600 rounded-2xl shadow-inner"><Users size={24}/></div>
           <div><p className="font-black text-slate-800 leading-tight">Meus Clientes</p><p className="text-[10px] text-slate-400 uppercase font-bold">Caderninho Digital</p></div>
         </button>
+
+        {/* NOVO: Botão de Relatórios (Só aparece se tiver comissão) */}
+        {commissionRate > 0 && (
+            <button onClick={() => navigate('/relatorios')} className="p-6 bg-indigo-600 border-2 border-indigo-500 rounded-[2.5rem] flex items-center gap-4 shadow-lg active:scale-95 text-left transition-all">
+              <div className="p-4 bg-indigo-500 text-white rounded-2xl shadow-inner"><PieChart size={24}/></div>
+              <div>
+                  <p className="font-black text-white leading-tight">Meus Relatórios</p>
+                  <p className="text-[10px] text-indigo-300 uppercase font-bold"></p>
+              </div>
+            </button>
+        )}
       </div>
     </div>
   );
