@@ -3,7 +3,8 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { 
     ArrowLeft, PieChart, TrendingUp, FileText, Printer, Search, ChevronLeft, ChevronRight, 
     ChevronDown, ChevronUp, Calculator, Share2, Save, Loader2, CheckCircle2, Trash2, 
-    Plus, DollarSign, Calendar as CalendarIcon, Clock, X, AlertTriangle, RefreshCw
+    Plus, DollarSign, Calendar as CalendarIcon, Clock, X, AlertTriangle, RefreshCw, Store,
+    Banknote, QrCode, CreditCard
 } from 'lucide-react';
 import { useData } from '../../contexts/DataContext';
 import { useAuth } from '../../contexts/AuthContext';
@@ -17,12 +18,11 @@ const Reports = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { orders, payments, settlements, refreshData } = useData();
-  const { session, isAdmin } = useAuth();
+  const { session, isAdmin, profile } = useAuth(); // <-- Adicionado profile aqui
 
   const [dateMode, setDateMode] = useState('month'); 
   const now = new Date();
   
-  // Recebe parâmetros de navegação (se veio do Dashboard clicando na notificação)
   const initialYear = location.state?.monthStr ? Number(location.state.monthStr.split('-')[0]) : now.getFullYear();
   const initialMonthStr = location.state?.monthStr || new Date().toISOString().slice(0, 7);
   const initialSeller = location.state?.sellerId || (isAdmin ? 'all' : session?.user?.id);
@@ -36,6 +36,9 @@ const Reports = () => {
   
   const [selectedSellerState, setSelectedSellerState] = useState(initialSeller);
   const activeSeller = isAdmin ? selectedSellerState : session?.user?.id;
+  
+  // NOVO ESTADO: Guarda a função (role) do usuário selecionado para saber se é balcão ou vendedor
+  const [activeSellerRole, setActiveSellerRole] = useState(null);
 
   const [sellerSearch, setSellerSearch] = useState('');
   const [showSellerDropdown, setShowSellerDropdown] = useState(false);
@@ -53,7 +56,6 @@ const Reports = () => {
 
   const monthsList = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
 
-  // Limpa os descontos e fecha os painéis quando muda de vendedor ou mês
   useEffect(() => {
       setExtraDiscount('');
       setShowPaymentForm(false);
@@ -65,10 +67,18 @@ const Reports = () => {
     setShowMonthPicker(false); 
   };
 
+  // BUSCA O CARGO (ROLE) E A TAXA DO USUÁRIO SELECIONADO
   useEffect(() => {
       if (activeSeller !== 'all') {
-          supabase.from('profiles').select('commission_rate').eq('id', activeSeller).single()
-          .then(({data}) => { if (data) setTempRate(data.commission_rate || 0); });
+          supabase.from('profiles').select('commission_rate, role').eq('id', activeSeller).single()
+          .then(({data}) => { 
+              if (data) {
+                  setTempRate(data.commission_rate || 0); 
+                  setActiveSellerRole(data.role);
+              }
+          });
+      } else {
+          setActiveSellerRole(null);
       }
   }, [activeSeller]);
 
@@ -149,6 +159,24 @@ const Reports = () => {
     return { totalSales, totalReturnsValue, netSales, totalReceived, ranking: rankedProducts };
   }, [filteredData.orders, groupedPayments]);
 
+  // NOVO: Cálculo focado no resumo do Balcão (Sem comissão)
+  const balcaoTotals = useMemo(() => {
+      if (activeSellerRole !== 'balcao') return null;
+      const totals = { Dinheiro: 0, Pix: 0, Cartão: 0, pendente: 0 };
+      
+      filteredData.orders.forEach(o => {
+          const paid = Number(o.paid || 0);
+          const total = Number(o.total || 0);
+          totals.pendente += Math.max(0, total - paid);
+          
+          if (paid > 0) {
+              const method = o.payment_method || 'Dinheiro';
+              if (totals[method] !== undefined) totals[method] += paid;
+          }
+      });
+      return totals;
+  }, [filteredData, activeSellerRole]);
+
   const saldoAnterior = useMemo(() => {
       if (activeSeller === 'all' || !settlements) return 0;
       const pastSettlements = settlements.filter(s => s.seller_id === activeSeller && s.month < selectedMonthStr);
@@ -206,7 +234,7 @@ const Reports = () => {
   }, [orders]);
 
   const filteredSellers = sellersList.filter(s => s.name.toLowerCase().includes(sellerSearch.toLowerCase()));
-  const currentSellerName = activeSeller === 'all' ? 'Todos os Vendedores' : sellersList.find(s => s.id === activeSeller)?.name || 'Vendedor';
+  const currentSellerName = activeSeller === 'all' ? 'Todos os Operadores' : sellersList.find(s => s.id === activeSeller)?.name || 'Operador';
 
   const handleSaveSettlement = async () => {
       if (!acertoPreview) return;
@@ -334,7 +362,6 @@ const Reports = () => {
           return;
       }
 
-      // CORREÇÃO: Apenas remove o pagamento específico e diminui o amount_paid 
       const newHistory = history.filter(p => p.id !== paymentIdToRemove);
       const newAmountPaid = Math.max(0, Number(currentSettlement.amount_paid || 0) - Number(paymentToRemove.amount));
       
@@ -393,7 +420,6 @@ const Reports = () => {
       
       const remaining = Number(currentSettlement.final_payout) + saldoAnterior - (currentSettlement.amount_paid || 0);
       
-      // Prepara os textos condicionais
       let saldoAntStr = '';
       if (saldoAnterior > 0) saldoAntStr = `<div class="row"><span>(+) Saldo Anterior:</span><span>${formatBRL(saldoAnterior)}</span></div>`;
       else if (saldoAnterior < 0) saldoAntStr = `<div class="row"><span>(-) Adiantamentos:</span><span>${formatBRL(Math.abs(saldoAnterior))}</span></div>`;
@@ -402,7 +428,6 @@ const Reports = () => {
           ? `<div class="row"><span>(-) Desc. Extra:</span><span>${formatBRL(currentSettlement.extra_discount)}</span></div>` 
           : '';
 
-      // Chama o template passando os dados já formatados
       const htmlContent = commissionTemplate({
           currentSellerName,
           selectedMonthStr,
@@ -419,7 +444,6 @@ const Reports = () => {
           remainingStr: formatBRL(Math.abs(remaining))
       });
 
-      // Usa a mesma função padrão do sistema para abrir e imprimir
       executePrint(htmlContent);
   };
 
@@ -427,7 +451,7 @@ const Reports = () => {
     const periodStr = dateMode === 'month' ? `${monthsList[Number(selectedMonthStr.split('-')[1])-1]}/${selectedMonthStr.split('-')[0]}` : `${new Date(customStart).toLocaleDateString()} a ${new Date(customEnd).toLocaleDateString()}`;
     const ordersFormatted = filteredData.orders.map(o => ({ date: new Date(o.created_at).toLocaleDateString(), desc: `#${o.id.slice(0,4)}`, value: `${o.type === 'return' ? '-' : ''}${formatBRL(o.total)}` }));
     const paymentsFormatted = groupedPayments.map(p => ({ date: new Date(p.date).toLocaleDateString(), desc: p.isGroup ? `${p.method} (Lote)` : p.method, value: formatBRL(p.amount) }));
-    const templateStats = { netSales: formatBRL(stats.netSales), commission: formatBRL(acertoPreview ? acertoPreview.commissionGross : 0), totalReceived: formatBRL(stats.totalReceived) };
+    const templateStats = { netSales: formatBRL(stats.netSales), commission: formatBRL(acertoPreview && activeSellerRole !== 'balcao' ? acertoPreview.commissionGross : 0), totalReceived: formatBRL(stats.totalReceived) };
     const htmlContent = reportTemplate({ periodStr, currentSellerName, stats: templateStats, orders: ordersFormatted, payments: paymentsFormatted, reportType });
     executePrint(htmlContent);
   };
@@ -458,7 +482,7 @@ const Reports = () => {
             </div>
             
             <div className="space-y-1">
-                <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Vendedor</label>
+                <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Operador / Vendedor</label>
                 <div className="relative">
                     {isAdmin ? (
                         <button onClick={() => setShowSellerDropdown(!showSellerDropdown)} className="w-full p-3.5 bg-slate-50 rounded-2xl flex justify-between items-center text-left">
@@ -524,8 +548,43 @@ const Reports = () => {
         </div>
       </div>
 
-      {dateMode === 'month' && activeSeller !== 'all' && acertoPreview && (
-          <div className="mb-6">
+      {/* BLOCO ESPECÍFICO DO BALCÃO (ESCONDE A COMISSÃO E MOSTRA O RESUMO DO PDV) */}
+      {dateMode === 'month' && activeSeller !== 'all' && activeSellerRole === 'balcao' && balcaoTotals && (
+          <div className="bg-white border-2 border-indigo-100 p-6 rounded-[2.5rem] space-y-4 shadow-lg shadow-indigo-50 mb-6 animate-in fade-in">
+             <div className="flex justify-between items-center">
+                 <p className="text-indigo-600 font-black uppercase text-xs tracking-widest flex items-center gap-2">
+                     <Store size={16}/> Resumo do PDV / Balcão
+                 </p>
+                 <span className="px-2 py-1 bg-indigo-100 text-indigo-600 rounded text-[10px] font-black uppercase">Fechamento Base</span>
+             </div>
+             <p className="text-[10px] font-bold text-slate-400 leading-tight">
+                 Como operador de caixa, este usuário não recebe comissão. Abaixo está o consolidado dos recebimentos dele no período selecionado.
+             </p>
+             
+             <div className="space-y-3 mt-4">
+                 <div className="flex justify-between items-center p-3 bg-slate-50 rounded-xl">
+                     <span className="text-xs font-bold text-slate-600 flex items-center gap-2"><Banknote size={16}/> Dinheiro</span>
+                     <span className="font-mono font-black text-slate-800">{formatBRL(balcaoTotals['Dinheiro'])}</span>
+                 </div>
+                 <div className="flex justify-between items-center p-3 bg-slate-50 rounded-xl">
+                     <span className="text-xs font-bold text-slate-600 flex items-center gap-2"><QrCode size={16}/> Pix</span>
+                     <span className="font-mono font-black text-slate-800">{formatBRL(balcaoTotals['Pix'])}</span>
+                 </div>
+                 <div className="flex justify-between items-center p-3 bg-slate-50 rounded-xl">
+                     <span className="text-xs font-bold text-slate-600 flex items-center gap-2"><CreditCard size={16}/> Cartão</span>
+                     <span className="font-mono font-black text-slate-800">{formatBRL(balcaoTotals['Cartão'])}</span>
+                 </div>
+                 <div className="flex justify-between items-center pt-3 border-t border-slate-100">
+                     <span className="text-xs font-black uppercase text-orange-500">Pendente de Recebimento</span>
+                     <span className="font-mono font-black text-orange-500">{formatBRL(balcaoTotals.pendente)}</span>
+                 </div>
+             </div>
+          </div>
+      )}
+
+      {/* BLOCO ORIGINAL DO VENDEDOR (COMISSÃO) */}
+      {dateMode === 'month' && activeSeller !== 'all' && activeSellerRole !== 'balcao' && acertoPreview && (
+          <div className="mb-6 animate-in fade-in">
               {currentSettlement ? (
                   <div className="bg-slate-800 text-white p-6 rounded-[2.5rem] space-y-4 shadow-xl relative overflow-hidden">
                       <div className="absolute -right-4 -top-4 bg-white/5 w-24 h-24 rounded-full blur-xl"></div>
@@ -808,11 +867,18 @@ const Reports = () => {
                 <div>
                     <div className="flex items-center gap-2">
                         <span className="font-mono font-bold text-indigo-500 bg-indigo-50 px-1.5 rounded">#{o.id.slice(0,4)}</span>
-                        <span className="font-black text-slate-800">{new Date(o.created_at).toLocaleDateString()}</span>
+                        <span className="font-black text-slate-800">
+                            {new Date(o.created_at).toLocaleDateString('pt-BR')} às {new Date(o.created_at).toLocaleTimeString('pt-BR', {hour: '2-digit', minute: '2-digit'})}
+                        </span>
                     </div>
-                    <p className="text-slate-400 font-bold mt-1">
-                        {o.seller_name} • {o.order_items.length} itens
+                    <p className="text-slate-500 font-bold mt-1 text-[10px] uppercase">
+                        Operador: {o.seller_name} • {o.order_items?.length || 0} itens
                     </p>
+                    {o.payment_method && (
+                        <p className="text-slate-400 font-bold mt-0.5 text-[10px] uppercase">
+                            Pagamento: {o.payment_method}
+                        </p>
+                    )}
                 </div>
                 <p className={`font-mono font-black ${o.type === 'return' ? 'text-red-400' : 'text-slate-800'}`}>
                     {o.type === 'return' ? '-' : ''}{formatBRL(o.total)}
