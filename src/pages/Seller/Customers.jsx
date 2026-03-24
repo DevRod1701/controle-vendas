@@ -1,13 +1,12 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, UserPlus, Search, Users, ChevronRight, ChevronLeft, Filter, Phone, Calendar, Clock, List, X } from 'lucide-react';
+import { ArrowLeft, UserPlus, Search, Users, ChevronRight, ChevronLeft, Filter, Phone, Calendar, Clock, List, X, Info } from 'lucide-react';
 import { useData } from '../../contexts/DataContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase } from '../../services/supabase';
 import { formatBRL } from '../../utils/formatters';
 import { Loader } from '../../components/ui/Loader';
 
-// Função auxiliar para resgatar números salvos no cache do navegador
 const getStoredInt = (key, defaultVal) => {
     const val = sessionStorage.getItem(key);
     return val !== null ? parseInt(val) : defaultVal;
@@ -18,7 +17,6 @@ const Customers = () => {
   const { session } = useAuth();
   const navigate = useNavigate();
   
-  // --- ESTADOS COM MEMÓRIA (Salvam no Cache do Navegador) ---
   const [search, setSearch] = useState(() => sessionStorage.getItem('cust_search') || '');
   const [filterDebt, setFilterDebt] = useState(() => sessionStorage.getItem('cust_filterDebt') === 'true'); 
   const [viewMode, setViewMode] = useState(() => sessionStorage.getItem('cust_viewMode') || 'all'); 
@@ -33,7 +31,6 @@ const Customers = () => {
 
   const monthsList = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
 
-  // --- MÁGICA 1: Salva os filtros toda vez que o usuário digita ou clica em algo ---
   useEffect(() => {
       sessionStorage.setItem('cust_search', search);
       sessionStorage.setItem('cust_filterDebt', filterDebt);
@@ -46,46 +43,80 @@ const Customers = () => {
   const prevMonth = () => { if (month === 0) { setMonth(11); setYear(year - 1); } else { setMonth(month - 1); } };
   const nextMonth = () => { if (month === 11) { setMonth(0); setYear(year + 1); } else { setMonth(month + 1); } };
 
-  // --- LÓGICA PRINCIPAL (Cálculo Global Correto + Filtro de Atividade) ---
   const customersWithBalance = useMemo(() => {
     return customers.map(c => {
       const allTrans = customerTransactions.filter(t => t.customer_id === c.id);
       
-      const totalPurchases = allTrans
-          .filter(t => t.type === 'purchase' || t.type === 'sale')
-          .reduce((acc, t) => acc + Number(t.amount || t.total || 0), 0);
-          
-      const totalPayments = allTrans
+      let paymentPool = allTrans
           .filter(t => t.type === 'payment')
           .reduce((acc, t) => acc + Number(t.amount || t.total || 0), 0);
-          
-      const globalBalance = totalPurchases - totalPayments;
 
-      let hasActivity = false;
+      const purchases = allTrans
+          .filter(t => t.type === 'purchase' || t.type === 'sale')
+          .sort((a, b) => new Date((a.date || a.created_at).split('T')[0]) - new Date((b.date || b.created_at).split('T')[0]));
+
+      let globalPurchases = 0;
+      let periodUnpaid = 0; 
+      let hasActivityInPeriod = false;
+
+      purchases.forEach(p => {
+          const val = Number(p.amount || p.total || 0);
+          globalPurchases += val;
+
+          const paidForThis = Math.min(val, paymentPool);
+          paymentPool -= paidForThis; 
+          const unpaidForThis = val - paidForThis; 
+
+          const pDateStr = (p.date || p.created_at || '').split('T')[0];
+          let isInPeriod = false;
+
+          if (viewMode === 'month') {
+              const pDate = new Date(pDateStr + 'T12:00:00');
+              if (pDate.getMonth() === month && pDate.getFullYear() === year) {
+                  isInPeriod = true;
+              }
+          } else if (viewMode === 'day') {
+              if (pDateStr === selectedDate) {
+                  isInPeriod = true;
+              }
+          } else {
+              isInPeriod = true;
+          }
+
+          if (isInPeriod) {
+              periodUnpaid += unpaidForThis; 
+              hasActivityInPeriod = true;
+          }
+      });
+
+      if (!hasActivityInPeriod && viewMode !== 'all') {
+          const hasPaymentInPeriod = allTrans.filter(t => t.type === 'payment').some(p => {
+              const pDateStr = (p.date || p.created_at || '').split('T')[0];
+              if (viewMode === 'month') {
+                  const pDate = new Date(pDateStr + 'T12:00:00');
+                  return pDate.getMonth() === month && pDate.getFullYear() === year;
+              } else if (viewMode === 'day') {
+                  return pDateStr === selectedDate;
+              }
+              return false;
+          });
+          if (hasPaymentInPeriod) hasActivityInPeriod = true;
+      }
+
+      let displayBalance = 0;
+      const globalBalance = globalPurchases - allTrans.filter(t => t.type === 'payment').reduce((acc, t) => acc + Number(t.amount || t.total || 0), 0);
 
       if (viewMode === 'all') {
-          hasActivity = allTrans.length > 0;
+          displayBalance = globalBalance; 
+          hasActivityInPeriod = allTrans.length > 0;
       } else {
-          allTrans.forEach(t => {
-              const transDateStr = (t.date || t.created_at || '').split('T')[0];
-              
-              if (viewMode === 'month') {
-                  const tDate = new Date(transDateStr + 'T12:00:00');
-                  if (tDate.getMonth() === month && tDate.getFullYear() === year) {
-                      hasActivity = true;
-                  }
-              } else if (viewMode === 'day') {
-                  if (transDateStr === selectedDate) {
-                      hasActivity = true;
-                  }
-              }
-          });
+          displayBalance = periodUnpaid; 
       }
 
       return { 
           ...c, 
-          balance: globalBalance,
-          hasActivity
+          balance: displayBalance,
+          hasActivity: hasActivityInPeriod
       };
     })
     .filter(c => c.name.toLowerCase().includes(search.toLowerCase())) 
@@ -100,13 +131,12 @@ const Customers = () => {
     });
   }, [customers, customerTransactions, search, filterDebt, viewMode, month, year, selectedDate]);
 
-  // --- MÁGICA 2: Restaura a posição da tela (Scroll) ao carregar a lista ---
   useEffect(() => {
       const savedScroll = sessionStorage.getItem('cust_scroll');
       if (savedScroll && customersWithBalance.length > 0) {
           setTimeout(() => {
               window.scrollTo({ top: parseInt(savedScroll), behavior: 'instant' });
-          }, 50); // Um fôlego minúsculo pro React desenhar os botões na tela antes de rolar
+          }, 50);
       }
   }, [customersWithBalance.length]);
 
@@ -123,18 +153,19 @@ const Customers = () => {
     setLoading(false);
   };
 
-  // --- MÁGICA 3: Salva o momento exato do clique ---
   const handleCustomerClick = (customerId) => {
       sessionStorage.setItem('cust_scroll', window.scrollY.toString());
       navigate(`/clientes/${customerId}`);
   };
 
-  // Botão de voltar para a Home (Limpa os filtros de pesquisa pra não confundir depois)
   const handleGoHome = () => {
       sessionStorage.removeItem('cust_search');
       sessionStorage.removeItem('cust_scroll');
       navigate('/');
   };
+
+  // Define o texto do filtro de acordo com a aba selecionada
+  const filterLabel = viewMode === 'all' ? 'Todos os Devedores' : viewMode === 'month' ? 'Devem neste mês' : 'Devem neste dia';
 
   return (
     <div className="p-6 pb-24 space-y-4 animate-in fade-in font-bold">
@@ -194,7 +225,8 @@ const Customers = () => {
                 <div className={`w-5 h-5 rounded-lg border flex items-center justify-center ${filterDebt ? 'bg-red-500 border-red-500 text-white' : 'border-slate-300 bg-white'}`}>
                     {filterDebt && <Filter size={10}/>}
                 </div>
-                Só Devedores
+                {/* Aqui está a troca dinâmica de nome do filtro */}
+                {filterLabel}
               </button>
 
               {totalDebtVisible > 0 && (
@@ -204,6 +236,17 @@ const Customers = () => {
               )}
           </div>
       </div>
+
+      {/* AVISO DISCRETO E EXPLICATIVO (Só aparece quando não está no Geral) */}
+      {viewMode !== 'all' && (
+          <div className="bg-indigo-50 p-3 rounded-2xl border border-indigo-100 flex items-start gap-3 animate-in fade-in">
+              <div className="p-1.5 bg-indigo-100 text-indigo-600 rounded-full mt-0.5"><Info size={14}/></div>
+              <p className="text-[10px] font-bold text-indigo-700 leading-tight">
+                  Mostrando apenas dívidas das compras feitas <span className="font-black">neste período</span>. 
+                  Para ver a dívida total acumulada do cliente, use a aba <span className="font-black uppercase bg-indigo-100 px-1 rounded">Geral</span>.
+              </p>
+          </div>
+      )}
 
       {isCreating && (
         <form onSubmit={handleCreate} className="bg-white p-6 rounded-[2.5rem] shadow-lg border-2 border-yellow-100 animate-in slide-in-from-top-4 space-y-4">
@@ -244,17 +287,21 @@ const Customers = () => {
                     {c.balance > 0.01 ? (
                         <>
                             <p className="text-base font-black text-red-500 font-mono">{formatBRL(c.balance)}</p>
-                            <p className="text-[9px] font-bold text-red-300 uppercase">Devendo</p>
+                            <p className="text-[9px] font-bold text-red-300 uppercase">
+                                {viewMode === 'all' ? 'Devendo Total' : 'Restante do Período'}
+                            </p>
                         </>
                     ) : c.balance < -0.01 ? (
                         <>
                             <p className="text-base font-black text-green-500 font-mono">{formatBRL(Math.abs(c.balance))}</p>
-                            <p className="text-[9px] font-bold text-green-400 uppercase">Crédito</p>
+                            <p className="text-[9px] font-bold text-green-400 uppercase">Crédito Global</p>
                         </>
                     ) : (
                         <>
                             <p className="text-base font-black text-green-500 font-mono">0,00</p>
-                            <p className="text-[9px] font-bold text-slate-300 uppercase">Quitado</p>
+                            <p className="text-[9px] font-bold text-slate-300 uppercase">
+                                {viewMode === 'all' ? 'Quitado' : 'Período Quitado'}
+                            </p>
                         </>
                     )}
                 </div>

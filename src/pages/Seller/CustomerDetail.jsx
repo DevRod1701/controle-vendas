@@ -18,26 +18,22 @@ const CustomerDetail = () => {
   const shareDateRef = useRef(null);
   const shareMonthRef = useRef(null);
 
-  // --- MÁGICA DO SCROLL ---
-  // Força a página a carregar sempre no topo absoluto, ignorando a rolagem da tela anterior
   useEffect(() => {
       window.scrollTo({ top: 0, behavior: 'instant' });
   }, []);
 
   const customer = customers.find(c => c.id === id);
   
-  // --- BLINDAGEM 1: Transações do Cliente com ordenação segura ---
   const myTrans = useMemo(() => {
       return customerTransactions
         .filter(t => t.customer_id === id)
         .sort((a, b) => {
             const dateA = new Date((a.date || a.created_at || '').split('T')[0]);
             const dateB = new Date((b.date || b.created_at || '').split('T')[0]);
-            return dateB - dateA;
+            return dateB - dateA; // Ordenação decrescente para a lista de itens
         });
   }, [customerTransactions, id]);
 
-  // --- BLINDAGEM 2: Saldo Total ---
   const currentTotalBalance = useMemo(() => {
     const purchase = myTrans
         .filter(t => t.type === 'purchase' || t.type === 'sale')
@@ -50,10 +46,16 @@ const CustomerDetail = () => {
     return purchase - paid;
   }, [myTrans]);
 
-  // --- BLINDAGEM 3: LÓGICA DE AMORTIZAÇÃO ACUMULATIVA (BOLA DE NEVE) ---
+  // --- NOVA LÓGICA DE AMORTIZAÇÃO (POTE DE PAGAMENTOS / FIFO) ---
   const groupedHistory = useMemo(() => {
       const groups = {};
 
+      // 1. Pote de Pagamentos Globais do Cliente
+      let paymentPool = myTrans
+          .filter(t => t.type === 'payment')
+          .reduce((acc, t) => acc + Number(t.amount || t.total || 0), 0);
+
+      // 2. Agrupa tudo por mês
       myTrans.forEach(t => {
           const rawDate = (t.date || t.created_at || '').split('T')[0];
           const dateObj = new Date(rawDate + 'T12:00:00');
@@ -71,18 +73,27 @@ const CustomerDetail = () => {
           else if (t.type === 'payment') groups[key].paymentsInMonth += val;
       });
 
-      const sortedKeys = Object.keys(groups).sort();
-      let accumulatedDebt = 0; 
+      // 3. Aplica a quitação cronológica (Do mês mais velho para o mais novo)
+      const sortedKeys = Object.keys(groups).sort(); // Garante ordem antiga -> nova
       
-      const calculatedGroups = sortedKeys.map(key => {
+      const calculatedGroups = sortedKeys.map((key, index) => {
           const group = groups[key];
-          const totalDebtAtThisPoint = accumulatedDebt + group.purchasesInMonth;
-          const remainingDebtThisMonth = totalDebtAtThisPoint - group.paymentsInMonth;
-          accumulatedDebt = remainingDebtThisMonth;
+          
+          // Usa o dinheiro do "pote" para quitar as compras deste mês
+          const paidForThisMonth = Math.min(group.purchasesInMonth, paymentPool);
+          paymentPool -= paidForThisMonth; // Subtrai o dinheiro usado do pote
+          
+          let remainingDebtThisMonth = group.purchasesInMonth - paidForThisMonth;
+
+          // Se estamos no mês mais recente (último do loop) e ainda sobrou dinheiro no Pote, é Crédito!
+          if (index === sortedKeys.length - 1 && paymentPool > 0) {
+              remainingDebtThisMonth = -paymentPool; // Negativo para UI exibir como "Crédito"
+          }
+
           return { ...group, amortizedDebt: remainingDebtThisMonth };
       });
 
-      return calculatedGroups.reverse();
+      return calculatedGroups.reverse(); // Inverte para mostrar o mês mais recente no topo
   }, [myTrans]);
 
   const [expandedMonths, setExpandedMonths] = useState(() => {
@@ -94,7 +105,6 @@ const CustomerDetail = () => {
       setExpandedMonths(prev => prev.includes(monthKey) ? prev.filter(k => k !== monthKey) : [...prev, monthKey]);
   };
 
-  // --- AUXILIARES ---
   const getTodayLocal = () => {
     const now = new Date();
     const year = now.getFullYear();
@@ -124,7 +134,6 @@ const CustomerDetail = () => {
       return `${d}/${m}/${y}`;
   };
 
-  // --- ESTADOS ---
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState({ name: '', phone: '' });
   const [mode, setMode] = useState(null); 
@@ -153,8 +162,8 @@ const CustomerDetail = () => {
       setShareMonth(`${newYear}-${newMonth}`);
   };
 
-  // --- CRUD ---
   const startEditing = () => { setEditForm({ name: customer.name, phone: customer.phone || '' }); setIsEditing(true); };
+  
   const handleUpdateCustomer = async () => {
     if (!editForm.name) return;
     setLoading(true);
@@ -163,6 +172,7 @@ const CustomerDetail = () => {
     else { setAlertInfo({ type: 'error', title: 'Erro', message: 'Falha ao atualizar.' }); }
     setLoading(false);
   };
+  
   const confirmDeleteCustomer = async () => {
     setConfirmDialog(null); setLoading(true);
     const { error } = await supabase.from('customers').delete().eq('id', id);
@@ -170,7 +180,6 @@ const CustomerDetail = () => {
     else { setLoading(false); setAlertInfo({ type: 'error', title: 'Erro', message: 'Falha ao excluir.' }); }
   };
 
-  // --- COMPARTILHAMENTO INTELIGENTE (Troca Devedor por Crédito) ---
   const handleShareOption = (type) => {
     if (!customer.phone) { setAlertInfo({ type: 'error', title: 'Sem Telefone', message: 'Cadastre um telefone.' }); return; }
 
@@ -217,7 +226,6 @@ const CustomerDetail = () => {
     let message = `*${title} - MEU PUDINZINHO* 🍮\nCliente: *${customer.name}*\n\n_Detalhes:_\n${historyText}\n\n`;
     if (periodTotalMsg) message += `${periodTotalMsg}\n\n`;
 
-    // LÓGICA DO TEXTO FINAL PARA WHATSAPP
     const balanceLabel = currentTotalBalance > 0.01 ? 'SALDO DEVEDOR' : currentTotalBalance < -0.01 ? 'CRÉDITO DISPONÍVEL' : 'SALDO QUITADO';
     message += `-----------------------------\n📊 *${balanceLabel}: ${formatBRL(Math.abs(currentTotalBalance))}*\n-----------------------------`;
 
@@ -225,7 +233,6 @@ const CustomerDetail = () => {
     setShowShareModal(false);
   };
 
-  // --- TRANSAÇÕES CRUD ---
   const handleSelectProduct = (prod) => { setSelectedProductObj(prod); setQty(1); setForm({ ...form, description: prod.name, amount: prod.price, date: getTodayLocal() }); setProductSearch(''); };
   const handleQtyChange = (delta) => { if (!selectedProductObj) return; const newQty = Math.max(1, qty + delta); setQty(newQty); setForm(prev => ({ ...prev, amount: selectedProductObj.price * newQty })); };
   const handleChangeProduct = () => { setSelectedProductObj(null); setQty(1); setForm({ ...form, description: '', amount: '' }); };
@@ -241,6 +248,7 @@ const CustomerDetail = () => {
     else { setAlertInfo({ type: 'error', title: 'Erro', message: 'Falha ao salvar.' }); }
     setLoading(false);
   };
+  
   const confirmDeleteTransaction = async (transId) => { setConfirmDialog(null); await supabase.from('customer_transactions').delete().eq('id', transId); refreshData(); };
 
   if (!customer) return <div className="p-6">Carregando...</div>;
@@ -250,7 +258,6 @@ const CustomerDetail = () => {
       <AlertModal isOpen={!!alertInfo} type={alertInfo?.type} title={alertInfo?.title} message={alertInfo?.message} onClose={() => setAlertInfo(null)} />
       <ConfirmModal isOpen={!!confirmDialog} title={confirmDialog?.title} message={confirmDialog?.message} onCancel={() => setConfirmDialog(null)} onConfirm={confirmDialog?.action} />
 
-      {/* HEADER */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3 w-full">
             <button onClick={() => navigate('/clientes')} className="p-3 bg-white rounded-2xl shadow-sm"><ArrowLeft size={20}/></button>
@@ -282,7 +289,6 @@ const CustomerDetail = () => {
         )}
       </div>
 
-      {/* SALDO TOTAL - ATUALIZADO COM TERNÁRIO E MATH.ABS() */}
       <div className={`p-6 rounded-[2.5rem] text-center border-2 relative overflow-hidden ${currentTotalBalance > 0.01 ? 'bg-red-50 border-red-100' : 'bg-green-50 border-green-100'}`}>
         <p className={`text-xs uppercase font-black tracking-widest ${currentTotalBalance > 0.01 ? 'text-red-400' : 'text-green-600'}`}>
             {currentTotalBalance > 0.01 ? 'Saldo Devedor Total' : currentTotalBalance < -0.01 ? 'Crédito Disponível' : 'Saldo Quitado'}
@@ -293,7 +299,6 @@ const CustomerDetail = () => {
         <button onClick={() => setShowShareModal(true)} className="absolute top-4 right-4 p-2 bg-white/50 rounded-full text-slate-600 hover:bg-green-500 hover:text-white transition-colors active:scale-90"><Share2 size={18} /></button>
       </div>
 
-      {/* MODAL COMPARTILHAR */}
       {showShareModal && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[350] flex items-end sm:items-center justify-center p-4 animate-in fade-in">
             <div className="bg-white w-full max-w-sm rounded-[2.5rem] p-6 shadow-2xl animate-in slide-in-from-bottom-10 space-y-4 max-h-[85vh] overflow-y-auto">

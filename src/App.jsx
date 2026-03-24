@@ -21,7 +21,10 @@ import Team from './pages/Admin/Team';
 import Approvals from './pages/Admin/Approvals';
 import NewSeller from './pages/Admin/NewSeller';
 import Reports from './pages/Admin/Reports';
-import RetroImport from './pages/Admin/RetroImport'; // <--- NOVO IMPORT
+import RetroImport from './pages/Admin/RetroImport';
+
+// NOVO: Importação do PDV (Balcão)
+import BalcaoPOS from './pages/BalcaoPOS'; // Ajuste o caminho se você salvou em outra pasta (ex: './pages/Admin/BalcaoPOS')
 
 const PrivateRoute = ({ children }) => {
   const { session, loading } = useAuth();
@@ -47,6 +50,14 @@ const AppRoutes = () => {
     <Routes>
       <Route path="/login" element={<Login />} />
 
+      {/* 🚀 O SEGREDO: A rota do PDV fica FORA do Layout para ocupar a tela toda no Desktop! */}
+      <Route path="/pdv" element={
+        <PrivateRoute>
+          <BalcaoPOS />
+        </PrivateRoute>
+      } />
+
+      {/* O restante do app fica protegido e dentro do Layout de Celular */}
       <Route element={<PrivateRoute><Layout /></PrivateRoute>}>
         <Route path="/" element={<Dashboard />} />
         <Route path="/catalogo" element={<Catalog />} />
@@ -62,7 +73,7 @@ const AppRoutes = () => {
         <Route path="/aprovacoes" element={<Approvals />} />
         <Route path="/novo-vendedor" element={<NewSeller />} />
         <Route path="/relatorios" element={<Reports />} />
-        <Route path="/importar" element={<RetroImport />} /> {/* <--- NOVA ROTA */}
+        <Route path="/importar" element={<RetroImport />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />
