@@ -10,6 +10,31 @@ import { pdvTemplate } from '../utils/print/pdvTemplate';
 import AlertModal from '../components/modals/AlertModal';
 import ConfirmModal from '../components/modals/ConfirmModal';
 
+// ==============================================================================
+// 🏍️ CONFIGURAÇÕES DE FRETE AUTOMÁTICO (DELIVERY)
+// Altere os valores abaixo conforme a necessidade da sua operação
+// ==============================================================================
+const DELIVERY_CONFIG = {
+    originCep: '03817125', 
+    // Coordenadas exatas aproximadas da sua loja (Vila Cisper) para cálculo
+    originLat: -23.4952,
+    originLon: -46.4851,
+    
+    baseDistanceKm: 1.5,     // Até quantos Km é considerado "Distância Base"
+    basePrice: 5.00,       // Preço cobrado se a entrega for até a "Distância Base"
+    pricePerExtraKm: 1.00  // Valor somado por cada Km adicional
+};
+// ==============================================================================
+
+// Função Matemática para calcular distância entre duas coordenadas (Fórmula de Haversine)
+const calculateDistance = (lat1, lon1, lat2, lon2) => {
+    const R = 6371; // Raio da Terra em km
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat/2) * Math.sin(dLat/2) + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon/2) * Math.sin(dLon/2);
+    return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
+};
+
 const getTodayLocal = () => {
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
@@ -35,6 +60,9 @@ const BalcaoPOS = () => {
   const [showMobileCart, setShowMobileCart] = useState(false);
   const [orderType, setOrderType] = useState('balcao'); 
   
+  const [deliveryFee, setDeliveryFee] = useState(''); 
+  const [isCalculatingFee, setIsCalculatingFee] = useState(false); 
+  
   const [editingObsId, setEditingObsId] = useState(null);
   const [tempObs, setTempObs] = useState('');
 
@@ -43,7 +71,6 @@ const BalcaoPOS = () => {
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
   const [saveCustomer, setSaveCustomer] = useState(false);
   
-  // Novos estados para o controle inteligente de endereço
   const [cepWarning, setCepWarning] = useState('');
   const [updateAddress, setUpdateAddress] = useState(false);
 
@@ -89,7 +116,9 @@ const BalcaoPOS = () => {
 
   const cartTotal = cart.reduce((acc, item) => acc + (item.price * item.qty), 0);
   const cartItemsCount = cart.reduce((acc, item) => acc + item.qty, 0);
-  const changeAmount = paymentMethod === 'Dinheiro' && cashReceived ? Math.max(0, Number(cashReceived) - cartTotal) : 0;
+  
+  const finalTotal = orderType === 'delivery' ? cartTotal + Number(deliveryFee || 0) : cartTotal;
+  const changeAmount = paymentMethod === 'Dinheiro' && cashReceived ? Math.max(0, Number(cashReceived) - finalTotal) : 0;
 
   const allPosOrders = useMemo(() => {
       return orders.filter(o => o.metadata && (o.metadata.order_type === 'balcao' || o.metadata.order_type === 'delivery'));
@@ -164,14 +193,54 @@ const BalcaoPOS = () => {
       setCustomerSearch(''); 
       setShowCustomerDropdown(false);
       setCepWarning('');
-      setUpdateAddress(false); // Reseta para não sobrescrever sem querer
+      setUpdateAddress(false); 
+      setDeliveryFee(''); 
+  };
+
+  // --- MOTOR DE FRETE AUTOMÁTICO ---
+  const calculateAutoDeliveryFee = async (addressData) => {
+      setIsCalculatingFee(true);
+      try {
+          // Usa a API gratuita do OpenStreetMap para achar a latitude e longitude do destino
+          const destQuery = `${addressData.logradouro}, ${addressData.bairro}, ${addressData.localidade}, Brazil`;
+          const destRes = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(destQuery)}&format=json&limit=1`);
+          const destData = await destRes.json();
+          
+          if (!destData || destData.length === 0) {
+              setCepWarning('⚠️ Endereço sem coordenadas. Insira o frete manualmente.');
+              return;
+          }
+
+          const destLat = parseFloat(destData[0].lat);
+          const destLon = parseFloat(destData[0].lon);
+
+          // Calcula distância em linha reta
+          const distanceKm = calculateDistance(DELIVERY_CONFIG.originLat, DELIVERY_CONFIG.originLon, destLat, destLon);
+
+          // Multiplicador de "rota urbana" (As ruas não são retas, motos fazem curvas. +30% de margem real)
+          const realisticDistance = distanceKm * 1.3;
+
+          // Aplica as regras de negócio
+          let fee = DELIVERY_CONFIG.basePrice;
+          if (realisticDistance > DELIVERY_CONFIG.baseDistanceKm) {
+              const extraKm = Math.ceil(realisticDistance - DELIVERY_CONFIG.baseDistanceKm);
+              fee += (extraKm * DELIVERY_CONFIG.pricePerExtraKm);
+          }
+
+          setDeliveryFee(fee.toFixed(2));
+          setCepWarning(`✅ Distância est.: ${realisticDistance.toFixed(1)}km | Frete automático aplicado.`);
+
+      } catch (err) {
+          console.error("Erro no cálculo automátio de frete", err);
+          setCepWarning('⚠️ Erro ao calcular. Insira o frete manualmente.');
+      } finally {
+          setIsCalculatingFee(false);
+      }
   };
 
   const handleCepChange = async (e) => {
-      // Pega apenas os números e limita a 8 dígitos
       let val = e.target.value.replace(/\D/g, '').slice(0, 8);
       
-      // Formatação visual (XXXXX-XXX)
       let formattedVal = val;
       if (val.length > 5) {
           formattedVal = val.replace(/^(\d{5})(\d)/, "$1-$2");
@@ -185,17 +254,20 @@ const BalcaoPOS = () => {
               const res = await fetch(`https://viacep.com.br/ws/${val}/json/`);
               const data = await res.json();
               if (data.erro) {
-                  setCepWarning('CEP não encontrado. Preencha manualmente.');
+                  setCepWarning('⚠️ CEP não encontrado. Preencha o endereço manualmente.');
+                  setDeliveryFee(''); // Reseta o frete pois não sabemos onde é
               } else {
                   setCustomer(prev => ({ 
                       ...prev, 
                       street: data.logradouro || '', 
                       neighborhood: data.bairro || '',
-                      complement: data.complemento || ''
+                      complement: data.complemento || prev.complement 
                   }));
+                  // Dispara o cálculo automático de frete!
+                  calculateAutoDeliveryFee(data);
               }
           } catch (err) {
-              setCepWarning('Erro na busca. Preencha manualmente.');
+              setCepWarning('⚠️ Erro na busca do CEP. Preencha manualmente.');
           }
       }
   };
@@ -215,14 +287,13 @@ const BalcaoPOS = () => {
           customer_info: { ...customer, name: finalCustomerName },
           payment_status: paymentStatus,
           cash_received: paymentMethod === 'Dinheiro' && paymentStatus === 'paid' ? Number(cashReceived) : 0,
-          change_amount: changeAmount
+          change_amount: changeAmount,
+          delivery_fee: orderType === 'delivery' ? Number(deliveryFee || 0) : 0 
       };
 
       try {
-          // Lógica de Atualização/Criação de Cliente
           if (customer.id) {
               const updateData = { phone: customer.phone, cpf: customer.cpf };
-              // Só atualiza o endereço no banco se o botão "Salvar Modificações" estiver marcado
               if (orderType === 'delivery' && updateAddress) {
                   updateData.cep = customer.cep;
                   updateData.street = customer.street;
@@ -257,8 +328,8 @@ const BalcaoPOS = () => {
               seller_id: session.user.id,
               seller_name: profile?.full_name || 'Balcão',
               status: 'approved',
-              total: cartTotal,
-              paid: paymentStatus === 'paid' ? cartTotal : 0,
+              total: finalTotal,
+              paid: paymentStatus === 'paid' ? finalTotal : 0,
               type: 'sale',
               payment_method: paymentMethod,
               metadata: metadata
@@ -282,7 +353,7 @@ const BalcaoPOS = () => {
           if (paymentStatus === 'paid') {
               await supabase.from('payments').insert([{
                   order_id: newOrder.id,
-                  amount: cartTotal,
+                  amount: finalTotal,
                   method: paymentMethod,
                   status: 'approved',
                   description: `Venda PDV - ${orderType.toUpperCase()}`,
@@ -440,6 +511,15 @@ const BalcaoPOS = () => {
           const { data } = await supabase.from('order_items').select('*').eq('order_id', orderData.id);
           itemsToPrint = data || [];
       }
+      
+      if (orderData.metadata?.delivery_fee > 0) {
+          itemsToPrint.push({
+              name: 'Taxa de Entrega',
+              qty: 1,
+              price: orderData.metadata.delivery_fee
+          });
+      }
+
       const isDelivery = orderData.metadata?.order_type === 'delivery';
       const custInfo = orderData.metadata?.customer_info;
       const html = pdvTemplate({ order: orderData, items: itemsToPrint, customerInfo: custInfo, isDelivery });
@@ -454,6 +534,7 @@ const BalcaoPOS = () => {
       setSaveCustomer(false);
       setCepWarning('');
       setUpdateAddress(false);
+      setDeliveryFee(''); 
       setCashReceived('');
       setShowMobileCart(false);
       setSuccessOrder(null);
@@ -520,7 +601,6 @@ const BalcaoPOS = () => {
           </div>
       )}
 
-      {/* LADO ESQUERDO: ÁREA PRINCIPAL */}
       <div className="flex-1 flex flex-col h-full relative z-0">
           
           <div className="bg-white p-4 shadow-sm z-10 flex items-center justify-between gap-4">
@@ -662,6 +742,12 @@ const BalcaoPOS = () => {
                                                       </div>
                                                   ))
                                               }
+                                              {order.metadata?.delivery_fee > 0 && (
+                                                  <div className="flex justify-between text-xs text-slate-700 mt-2 pt-2 border-t border-slate-100">
+                                                      <span className="truncate pr-2">Taxa de Entrega</span>
+                                                      <span className="font-mono font-bold flex-shrink-0">{formatBRL(order.metadata.delivery_fee)}</span>
+                                                  </div>
+                                              )}
                                           </div>
 
                                           <div className="bg-white p-3 rounded-xl shadow-sm border border-slate-100">
@@ -768,7 +854,7 @@ const BalcaoPOS = () => {
                           </div>
                           <span className="uppercase text-xs font-black">Ver Carrinho</span>
                       </div>
-                      <span className="font-mono text-lg">{formatBRL(cartTotal)}</span>
+                      <span className="font-mono text-lg">{formatBRL(finalTotal)}</span>
                   </button>
               </div>
           )}
@@ -856,7 +942,6 @@ const BalcaoPOS = () => {
                               <User size={14} /> <span className="text-[10px] font-black uppercase tracking-widest">Cliente</span>
                           </div>
                           
-                          {/* SÓ MOSTRA O "SALVAR" SE O CLIENTE FOR NOVO (id == null) */}
                           {!customer.id ? (
                               customer.name && (
                                   <label className="flex items-center gap-1.5 cursor-pointer">
@@ -872,7 +957,7 @@ const BalcaoPOS = () => {
                       <div className="relative">
                           <input 
                               className="w-full p-2.5 bg-white rounded-xl text-xs font-bold outline-none border border-slate-200 focus:border-yellow-400" 
-                              placeholder="Buscar ou Digitar Nome..." 
+                              placeholder="Buscar Nome, CPF ou Tel..." 
                               value={customerSearch || customer.name} 
                               onChange={e => {
                                   setCustomerSearch(e.target.value);
@@ -921,6 +1006,7 @@ const BalcaoPOS = () => {
                                   <input className="col-span-2 w-full p-2.5 bg-white rounded-xl text-xs font-bold outline-none border border-slate-200 focus:border-yellow-400" placeholder="Rua / Avenida" value={customer.street} onChange={e => setCustomer({...customer, street: e.target.value})} />
                                   <input className="w-full p-2.5 bg-white rounded-xl text-xs font-bold outline-none border border-slate-200 focus:border-yellow-400" placeholder="Num" value={customer.number} onChange={e => setCustomer({...customer, number: e.target.value})} />
                                   <input className="col-span-3 w-full p-2.5 bg-white rounded-xl text-xs font-bold outline-none border border-slate-200 focus:border-yellow-400" placeholder="Bairro" value={customer.neighborhood} onChange={e => setCustomer({...customer, neighborhood: e.target.value})} />
+                                  <input className="col-span-3 w-full p-2.5 bg-white rounded-xl text-xs font-bold outline-none border border-slate-200 focus:border-yellow-400" placeholder="Complemento (Apto, Bloco...)" value={customer.complement} onChange={e => setCustomer({...customer, complement: e.target.value})} />
                               </div>
                           </div>
                       )}
@@ -970,9 +1056,24 @@ const BalcaoPOS = () => {
                   </div>
 
                   <div className="pt-3 mt-1 border-t border-slate-100">
+                      {orderType === 'delivery' && (
+                          <div className="flex justify-between items-center mb-2 animate-in fade-in">
+                              <span className="text-xs font-black uppercase text-slate-400 flex items-center gap-2">
+                                  Taxa de Entrega (Frete)
+                                  {isCalculatingFee && <Loader2 size={12} className="animate-spin text-indigo-500" />}
+                              </span>
+                              <input 
+                                  type="number" 
+                                  className="w-24 p-2 bg-white rounded-lg text-sm font-bold outline-none border border-slate-200 focus:border-yellow-400 text-right" 
+                                  placeholder="R$ 0,00" 
+                                  value={deliveryFee} 
+                                  onChange={e => setDeliveryFee(e.target.value)} 
+                              />
+                          </div>
+                      )}
                       <div className="flex justify-between items-center mb-2">
                           <span className="text-xs font-black uppercase text-slate-400">Total a Cobrar</span>
-                          <span className="text-2xl font-black font-mono text-slate-800">{formatBRL(cartTotal)}</span>
+                          <span className="text-2xl font-black font-mono text-slate-800">{formatBRL(finalTotal)}</span>
                       </div>
                       <button 
                           onClick={handleCheckout} 
