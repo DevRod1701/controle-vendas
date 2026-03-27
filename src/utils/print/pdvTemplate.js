@@ -1,7 +1,11 @@
 import { formatBRL } from '../formatters';
 
 export const pdvTemplate = ({ order, items, customerInfo, isDelivery }) => {
-    
+    const isPreOrder = order.metadata?.is_pre_order;
+    const paid = Number(order.paid || 0);
+    const total = Number(order.total || 0);
+    const pending = Math.max(0, total - paid);
+
     const styles = `
       @page { size: 80mm auto; margin: 0; }
       body { 
@@ -13,7 +17,6 @@ export const pdvTemplate = ({ order, items, customerInfo, isDelivery }) => {
           font-size: 13px; 
           line-height: 1.2;
           font-weight: bold;
-          /* Força o navegador a imprimir backgrounds */
           -webkit-print-color-adjust: exact;
           print-color-adjust: exact;
       }
@@ -29,10 +32,8 @@ export const pdvTemplate = ({ order, items, customerInfo, isDelivery }) => {
       .item-header { display: flex; justify-content: space-between; }
       .item-desc { font-size: 10px; margin-left: 10px; }
       .close-btn { width: 100%; padding: 10px; background: #000; color: #fff; text-align: center; margin-bottom: 10px; cursor: pointer; border: none; font-weight: bold; }
-      
-      /* Estilo da faixa preta forçada */
       .bg-black { background-color: #000 !important; color: #fff !important; }
-      
+      .bg-gray { background-color: #eee !important; border: 1px solid #000; }
       @media print { .close-btn { display: none; } }
     `;
 
@@ -46,9 +47,19 @@ export const pdvTemplate = ({ order, items, customerInfo, isDelivery }) => {
       </div>
     `).join('');
 
+    // Define o cabeçalho do pedido (se é encomenda, delivery ou balcão)
+    let headerTypeHtml = '';
+    if (isPreOrder) {
+        headerTypeHtml = `<div class="text-center bold bg-gray" style="font-size: 14px; padding: 4px 0;">ENCOMENDA ${isDelivery ? '(DELIVERY)' : '(RETIRADA)'}</div>`;
+    } else {
+        headerTypeHtml = isDelivery 
+            ? `<div class="text-center bold bg-black" style="font-size: 14px; padding: 4px 0;">DELIVERY</div>`
+            : `<div class="text-center bold bg-gray" style="font-size: 14px; padding: 4px 0;">RETIRADA BALCÃO</div>`;
+    }
+
     const addressHtml = isDelivery && customerInfo ? `
       <div class="divider"></div>
-      <div class="text-center bold bg-black" style="font-size: 14px; padding: 4px 0;">DELIVERY</div>
+      ${headerTypeHtml}
       <div style="margin-top: 5px;">
         <div><span class="bold">Cliente:</span> ${customerInfo.name || 'Não informado'}</div>
         <div><span class="bold">Tel:</span> ${customerInfo.phone || 'Não informado'}</div>
@@ -59,7 +70,7 @@ export const pdvTemplate = ({ order, items, customerInfo, isDelivery }) => {
       </div>
     ` : `
       <div class="divider"></div>
-      <div class="text-center bold" style="font-size: 14px; padding: 4px 0; border: 1px solid #000;">RETIRADA BALCÃO</div>
+      ${headerTypeHtml}
       <div style="margin-top: 5px;">
         <div><span class="bold">Cliente:</span> ${customerInfo?.name || 'Cliente Balcão'}</div>
       </div>
@@ -93,12 +104,29 @@ export const pdvTemplate = ({ order, items, customerInfo, isDelivery }) => {
             <span>Pagamento:</span>
             <span>${order.payment_method || 'Dinheiro'}</span>
         </div>
+        
+        <div class="divider"></div>
+        
         <div class="row">
-            <span>Status:</span>
-            <span>${order.paid >= order.total ? 'PAGO' : 'PENDENTE'}</span>
+            <span>Total do Pedido:</span>
+            <span>${formatBRL(total)}</span>
+        </div>
+        <div class="row">
+            <span>Valor Recebido:</span>
+            <span>${formatBRL(paid)}</span>
         </div>
         
-        <div class="total">TOTAL: ${formatBRL(order.total)}</div>
+        ${pending > 0 ? `
+        <div class="row bold" style="margin-top: 5px; font-size: 15px;">
+            <span>PENDENTE:</span>
+            <span>${formatBRL(pending)}</span>
+        </div>
+        ` : `
+        <div class="row bold" style="margin-top: 5px;">
+            <span>STATUS:</span>
+            <span>PAGO TOTAL</span>
+        </div>
+        `}
         
         <div class="divider-thick"></div>
         <div class="text-center" style="font-size: 10px; margin-top: 10px;">Obrigado pela preferência!</div>

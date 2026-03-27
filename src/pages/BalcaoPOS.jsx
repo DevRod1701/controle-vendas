@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, ShoppingCart, Plus, Minus, X, User, CreditCard, Banknote, QrCode, Bike, Store, CheckCircle2, Loader2, Printer, History, ArrowLeft, Trash2, LogOut, Lock, ChevronDown, ChevronUp, Calculator, ListFilter, MessageSquare, AlertCircle, MapPin } from 'lucide-react';
+import { Search, ShoppingCart, Plus, Minus, X, User, CreditCard, Banknote, QrCode, Bike, Store, CheckCircle2, Loader2, Printer, History, ArrowLeft, Trash2, LogOut, Lock, ChevronDown, ChevronUp, Calculator, ListFilter, MessageSquare, AlertCircle, MapPin, Clock } from 'lucide-react';
 import { useData } from '../contexts/DataContext';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../services/supabase';
@@ -12,23 +12,19 @@ import ConfirmModal from '../components/modals/ConfirmModal';
 
 // ==============================================================================
 // 🏍️ CONFIGURAÇÕES DE FRETE AUTOMÁTICO (DELIVERY)
-// Altere os valores abaixo conforme a necessidade da sua operação
 // ==============================================================================
 const DELIVERY_CONFIG = {
     originCep: '03817125', 
-    // Coordenadas exatas aproximadas da sua loja (Vila Cisper) para cálculo
-    originLat: -23.4952,
-    originLon: -46.4851,
-    
-    baseDistanceKm: 1.5,     // Até quantos Km é considerado "Distância Base"
-    basePrice: 5.00,       // Preço cobrado se a entrega for até a "Distância Base"
-    pricePerExtraKm: 1.00  // Valor somado por cada Km adicional
+    originLat: -23.49138767727177, //-23.49138767727177, -46.49318473636381
+    originLon: -46.49318473636381,
+    baseDistanceKm: 1.5,   // Distância base alterada para 1.5km
+    basePrice: 5.00,       // Preço da distância base
+    pricePerExtraKm: 1.00  // Valor por Km adicional
 };
 // ==============================================================================
 
-// Função Matemática para calcular distância entre duas coordenadas (Fórmula de Haversine)
 const calculateDistance = (lat1, lon1, lat2, lon2) => {
-    const R = 6371; // Raio da Terra em km
+    const R = 6371; 
     const dLat = (lat2 - lat1) * Math.PI / 180;
     const dLon = (lon2 - lon1) * Math.PI / 180;
     const a = Math.sin(dLat/2) * Math.sin(dLat/2) + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon/2) * Math.sin(dLon/2);
@@ -60,6 +56,10 @@ const BalcaoPOS = () => {
   const [showMobileCart, setShowMobileCart] = useState(false);
   const [orderType, setOrderType] = useState('balcao'); 
   
+  // ESTADOS DE ENCOMENDA
+  const [isPreOrder, setIsPreOrder] = useState(false);
+  const [downPayment, setDownPayment] = useState('');
+
   const [deliveryFee, setDeliveryFee] = useState(''); 
   const [isCalculatingFee, setIsCalculatingFee] = useState(false); 
   
@@ -98,9 +98,13 @@ const BalcaoPOS = () => {
   const [pinError, setPinError] = useState('');
   const [pinAction, setPinAction] = useState({ type: null, payload: null }); 
 
+  // 1. FILTRO DE PRODUTOS: Esconde os que têm estoque <= 0
   const filteredProducts = useMemo(() => {
-      if (!search) return products;
-      return products.filter(p => p.name.toLowerCase().includes(search.toLowerCase()));
+      let list = products.filter(p => p.stock > 0);
+      if (search) {
+          list = list.filter(p => p.name.toLowerCase().includes(search.toLowerCase()));
+      }
+      return list;
   }, [products, search]);
 
   const filteredCustomers = useMemo(() => {
@@ -134,16 +138,23 @@ const BalcaoPOS = () => {
       return filtered.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
   }, [allPosOrders, historyFilter, filterDate, filterMonth]);
 
+  // 3. ATUALIZAÇÃO DO BALANÇO: Separa pendências normais de pendências de encomendas
   const todayBalance = useMemo(() => {
       const todayStr = getTodayLocal();
       const todayOrders = allPosOrders.filter(o => o.created_at.startsWith(todayStr));
-      const totals = { total: 0, Dinheiro: 0, Pix: 0, Cartão: 0, pendente: 0 };
+      const totals = { total: 0, Dinheiro: 0, Pix: 0, Cartão: 0, pendente: 0, pendente_encomenda: 0 };
       
       todayOrders.forEach(o => {
           totals.total += Number(o.total);
           const paid = Number(o.paid || 0);
           const total = Number(o.total || 0);
-          totals.pendente += Math.max(0, total - paid);
+          const debt = Math.max(0, total - paid);
+          
+          if (o.metadata?.is_pre_order) {
+              totals.pendente_encomenda += debt;
+          } else {
+              totals.pendente += debt;
+          }
           
           if (paid > 0) {
               const method = o.payment_method || 'Dinheiro';
@@ -153,9 +164,17 @@ const BalcaoPOS = () => {
       return totals;
   }, [allPosOrders]);
 
+  // --- CARRINHO COM TRAVA DE ESTOQUE ---
   const addToCart = (product) => {
       setCart(prev => {
           const exists = prev.find(i => i.id === product.id && !i.observation); 
+          const currentQty = exists ? exists.qty : 0;
+          
+          if (currentQty >= product.stock) {
+              setAlertInfo({ type: 'error', title: 'Estoque Insuficiente', message: `O estoque máximo deste item é ${product.stock} un.`});
+              return prev;
+          }
+
           if (exists) return prev.map(i => i.id === product.id && !i.observation ? { ...i, qty: i.qty + 1 } : i);
           
           const cartItemId = `${product.id}-${Date.now()}`;
@@ -164,12 +183,24 @@ const BalcaoPOS = () => {
   };
 
   const updateQty = (cartItemId, delta) => {
-      setCart(prev => prev.map(item => {
-          if (item.cartItemId === cartItemId) {
-              return { ...item, qty: item.qty + delta };
+      setCart(prev => {
+          const itemToUpdate = prev.find(i => i.cartItemId === cartItemId);
+          if (!itemToUpdate) return prev;
+
+          const newQty = itemToUpdate.qty + delta;
+          
+          if (delta > 0 && newQty > itemToUpdate.stock) {
+              setAlertInfo({ type: 'error', title: 'Estoque Insuficiente', message: `Estoque máximo atingido (${itemToUpdate.stock} un).`});
+              return prev;
           }
-          return item;
-      }).filter(item => item.qty > 0));
+
+          return prev.map(item => {
+              if (item.cartItemId === cartItemId) {
+                  return { ...item, qty: newQty };
+              }
+              return item;
+          }).filter(item => item.qty > 0);
+      });
   };
 
   const saveObservation = (cartItemId) => {
@@ -194,33 +225,50 @@ const BalcaoPOS = () => {
       setShowCustomerDropdown(false);
       setCepWarning('');
       setUpdateAddress(false); 
-      setDeliveryFee(''); 
+      
+      // Gatilho Automático: Se puxou do banco e já tem rua, calcula o frete!
+      if (c.cep && c.street) {
+          calculateAutoDeliveryFee({
+              logradouro: c.street,
+              bairro: c.neighborhood,
+              localidade: 'São Paulo', // Fallback assumindo sua região base
+              uf: 'SP'
+          });
+      } else {
+          setDeliveryFee(''); 
+      }
   };
 
-  // --- MOTOR DE FRETE AUTOMÁTICO ---
   const calculateAutoDeliveryFee = async (addressData) => {
       setIsCalculatingFee(true);
       try {
-          // Usa a API gratuita do OpenStreetMap para achar a latitude e longitude do destino
-          const destQuery = `${addressData.logradouro}, ${addressData.bairro}, ${addressData.localidade}, Brazil`;
-          const destRes = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(destQuery)}&format=json&limit=1`);
-          const destData = await destRes.json();
+          const city = addressData.localidade || 'São Paulo';
+          const state = addressData.uf || 'SP';
           
+          // 1ª Tentativa: Busca pela Rua exata
+          const streetQuery = `${addressData.logradouro}, ${city}, ${state}, Brazil`;
+          let destRes = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(streetQuery)}&format=json&limit=1`);
+          let destData = await destRes.json();
+          
+          // 2ª Tentativa (Opcional): Se falhou na rua, busca pelo Bairro para dar uma estimativa
           if (!destData || destData.length === 0) {
-              setCepWarning('⚠️ Endereço sem coordenadas. Insira o frete manualmente.');
+              const neighborhoodQuery = `${addressData.bairro}, ${city}, ${state}, Brazil`;
+              destRes = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(neighborhoodQuery)}&format=json&limit=1`);
+              destData = await destRes.json();
+          }
+
+          if (!destData || destData.length === 0) {
+              setCepWarning('⚠️ Coordenadas não encontradas. Insira o frete manualmente.');
+              setIsCalculatingFee(false);
               return;
           }
 
           const destLat = parseFloat(destData[0].lat);
           const destLon = parseFloat(destData[0].lon);
 
-          // Calcula distância em linha reta
           const distanceKm = calculateDistance(DELIVERY_CONFIG.originLat, DELIVERY_CONFIG.originLon, destLat, destLon);
-
-          // Multiplicador de "rota urbana" (As ruas não são retas, motos fazem curvas. +30% de margem real)
           const realisticDistance = distanceKm * 1.3;
 
-          // Aplica as regras de negócio
           let fee = DELIVERY_CONFIG.basePrice;
           if (realisticDistance > DELIVERY_CONFIG.baseDistanceKm) {
               const extraKm = Math.ceil(realisticDistance - DELIVERY_CONFIG.baseDistanceKm);
@@ -255,7 +303,7 @@ const BalcaoPOS = () => {
               const data = await res.json();
               if (data.erro) {
                   setCepWarning('⚠️ CEP não encontrado. Preencha o endereço manualmente.');
-                  setDeliveryFee(''); // Reseta o frete pois não sabemos onde é
+                  setDeliveryFee(''); 
               } else {
                   setCustomer(prev => ({ 
                       ...prev, 
@@ -263,7 +311,6 @@ const BalcaoPOS = () => {
                       neighborhood: data.bairro || '',
                       complement: data.complemento || prev.complement 
                   }));
-                  // Dispara o cálculo automático de frete!
                   calculateAutoDeliveryFee(data);
               }
           } catch (err) {
@@ -282,13 +329,22 @@ const BalcaoPOS = () => {
       const finalCustomerName = customer.name.trim() || "Cliente Balcão";
       setIsSubmitting(true);
 
+      // Determina o valor pago na hora baseado se é encomenda (sinal) ou venda normal
+      let paidAmount = 0;
+      if (isPreOrder) {
+          paidAmount = Math.min(finalTotal, Number(downPayment || 0));
+      } else if (paymentStatus === 'paid') {
+          paidAmount = finalTotal;
+      }
+
       const metadata = {
           order_type: orderType,
           customer_info: { ...customer, name: finalCustomerName },
-          payment_status: paymentStatus,
-          cash_received: paymentMethod === 'Dinheiro' && paymentStatus === 'paid' ? Number(cashReceived) : 0,
-          change_amount: changeAmount,
-          delivery_fee: orderType === 'delivery' ? Number(deliveryFee || 0) : 0 
+          payment_status: isPreOrder && paidAmount < finalTotal ? 'partial' : paymentStatus,
+          cash_received: (!isPreOrder && paymentMethod === 'Dinheiro' && paymentStatus === 'paid') ? Number(cashReceived) : 0,
+          change_amount: !isPreOrder ? changeAmount : 0,
+          delivery_fee: orderType === 'delivery' ? Number(deliveryFee || 0) : 0,
+          is_pre_order: isPreOrder // Tag que marca se foi encomenda
       };
 
       try {
@@ -329,7 +385,7 @@ const BalcaoPOS = () => {
               seller_name: profile?.full_name || 'Balcão',
               status: 'approved',
               total: finalTotal,
-              paid: paymentStatus === 'paid' ? finalTotal : 0,
+              paid: paidAmount, // Registra apenas o que foi pago (Sinal ou Total)
               type: 'sale',
               payment_method: paymentMethod,
               metadata: metadata
@@ -350,13 +406,14 @@ const BalcaoPOS = () => {
               await supabase.from('products').update({ stock: item.stock - item.qty }).eq('id', item.id);
           }
 
-          if (paymentStatus === 'paid') {
+          // Só lança no caixa o valor que realmente foi recebido
+          if (paidAmount > 0) {
               await supabase.from('payments').insert([{
                   order_id: newOrder.id,
-                  amount: finalTotal,
+                  amount: paidAmount,
                   method: paymentMethod,
                   status: 'approved',
-                  description: `Venda PDV - ${orderType.toUpperCase()}`,
+                  description: isPreOrder ? `Sinal de Encomenda - ${orderType.toUpperCase()}` : `Venda PDV - ${orderType.toUpperCase()}`,
                   approved_by: session.user.id,
                   approver_name: profile?.full_name || 'Balcão',
                   approved_at: new Date().toISOString()
@@ -494,11 +551,12 @@ const BalcaoPOS = () => {
   };
 
   const handleLogout = async () => {
+      // 3. Apenas trava se a pendência for normal (Não trava se for pendência de Encomenda)
       if (todayBalance.pendente > 0) {
           setAlertInfo({ 
               type: 'error', 
               title: 'Ação Bloqueada', 
-              message: `Você não pode fechar o caixa com pendências. Restam receber: ${formatBRL(todayBalance.pendente)}.` 
+              message: `Você não pode fechar o caixa com vendas do dia pendentes. Restam receber: ${formatBRL(todayBalance.pendente)}.` 
           });
           return;
       }
@@ -535,6 +593,8 @@ const BalcaoPOS = () => {
       setCepWarning('');
       setUpdateAddress(false);
       setDeliveryFee(''); 
+      setIsPreOrder(false); // Reseta encomenda
+      setDownPayment('');   // Reseta sinal
       setCashReceived('');
       setShowMobileCart(false);
       setSuccessOrder(null);
@@ -550,7 +610,7 @@ const BalcaoPOS = () => {
                   <div>
                       <h2 className="text-3xl font-black text-slate-800 uppercase tracking-tighter">Pedido Finalizado</h2>
                       <p className="font-bold text-slate-400 mt-2">OS: #{successOrder.id.slice(0,6).toUpperCase()}</p>
-                      {successOrder.metadata?.change_amount > 0 && (
+                      {successOrder.metadata?.change_amount > 0 && !successOrder.metadata?.is_pre_order && (
                           <p className="mt-4 text-lg font-black text-slate-800 bg-slate-100 p-3 rounded-2xl border border-slate-200">
                               Troco do Cliente: <span className="text-green-600 block text-2xl mt-1">{formatBRL(successOrder.metadata.change_amount)}</span>
                           </p>
@@ -601,6 +661,7 @@ const BalcaoPOS = () => {
           </div>
       )}
 
+      {/* LADO ESQUERDO: ÁREA PRINCIPAL */}
       <div className="flex-1 flex flex-col h-full relative z-0">
           
           <div className="bg-white p-4 shadow-sm z-10 flex items-center justify-between gap-4">
@@ -648,21 +709,27 @@ const BalcaoPOS = () => {
                   </div>
 
                   <div className="flex-1 overflow-y-auto p-4 pb-24 md:pb-6">
-                      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 md:gap-4">
-                          {filteredProducts.map(p => (
-                              <button 
-                                  key={p.id} 
-                                  onClick={() => addToCart(p)}
-                                  className="bg-white p-4 rounded-[2rem] border border-slate-100 shadow-sm hover:shadow-md hover:border-yellow-200 active:scale-95 transition-all text-left flex flex-col h-full"
-                              >
-                                  <div className="flex-1">
-                                      <p className="font-black text-slate-800 text-sm leading-tight">{p.name}</p>
-                                      <p className="text-[10px] text-slate-400 mt-1 uppercase font-bold">Estoque: {p.stock}</p>
-                                  </div>
-                                  <p className="text-indigo-600 font-black font-mono text-lg mt-3">{formatBRL(p.price)}</p>
-                              </button>
-                          ))}
-                      </div>
+                      {filteredProducts.length === 0 ? (
+                          <div className="flex flex-col items-center justify-center h-full text-slate-400">
+                              <p className="uppercase text-xs font-black">Nenhum produto em estoque.</p>
+                          </div>
+                      ) : (
+                          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 md:gap-4">
+                              {filteredProducts.map(p => (
+                                  <button 
+                                      key={p.id} 
+                                      onClick={() => addToCart(p)}
+                                      className="bg-white p-4 rounded-[2rem] border border-slate-100 shadow-sm hover:shadow-md hover:border-yellow-200 active:scale-95 transition-all text-left flex flex-col h-full"
+                                  >
+                                      <div className="flex-1">
+                                          <p className="font-black text-slate-800 text-sm leading-tight">{p.name}</p>
+                                          <p className="text-[10px] text-slate-400 mt-1 uppercase font-bold">Estoque: {p.stock}</p>
+                                      </div>
+                                      <p className="text-indigo-600 font-black font-mono text-lg mt-3">{formatBRL(p.price)}</p>
+                                  </button>
+                              ))}
+                          </div>
+                      )}
                   </div>
               </>
           )}
@@ -698,8 +765,11 @@ const BalcaoPOS = () => {
                                           {order.metadata?.order_type === 'delivery' ? <Bike size={20}/> : <Store size={20}/>}
                                       </div>
                                       <div>
-                                          <p className="font-black text-slate-800 text-sm truncate">{order.metadata?.customer_info?.name || 'Cliente Balcão'}</p>
-                                          <p className="text-xs font-bold text-slate-400">
+                                          <div className="flex items-center gap-2">
+                                              <p className="font-black text-slate-800 text-sm truncate">{order.metadata?.customer_info?.name || 'Cliente Balcão'}</p>
+                                              {order.metadata?.is_pre_order && <span className="bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded text-[8px] font-black uppercase">Encomenda</span>}
+                                          </div>
+                                          <p className="text-xs font-bold text-slate-400 mt-0.5">
                                               #{order.id.slice(0,4).toUpperCase()} • {new Date(order.created_at).toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'})}
                                           </p>
                                       </div>
@@ -816,28 +886,34 @@ const BalcaoPOS = () => {
                       </div>
 
                       <div className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-100 space-y-4">
-                          <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-2">Recebimentos Realizados</h3>
+                          <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-2">Valores em Caixa</h3>
                           
                           <div className="flex justify-between items-center p-3 bg-slate-50 rounded-2xl">
                               <div className="flex items-center gap-2 text-slate-600"><Banknote size={18}/> <span className="font-bold text-sm">Dinheiro</span></div>
                               <span className="font-mono font-black text-indigo-600">{formatBRL(todayBalance['Dinheiro'])}</span>
                           </div>
-                          
                           <div className="flex justify-between items-center p-3 bg-slate-50 rounded-2xl">
                               <div className="flex items-center gap-2 text-slate-600"><QrCode size={18}/> <span className="font-bold text-sm">Pix</span></div>
                               <span className="font-mono font-black text-indigo-600">{formatBRL(todayBalance['Pix'])}</span>
                           </div>
-                          
                           <div className="flex justify-between items-center p-3 bg-slate-50 rounded-2xl">
                               <div className="flex items-center gap-2 text-slate-600"><CreditCard size={18}/> <span className="font-bold text-sm">Cartão</span></div>
                               <span className="font-mono font-black text-indigo-600">{formatBRL(todayBalance['Cartão'])}</span>
                           </div>
 
-                          <div className="pt-4 border-t border-slate-100 flex justify-between items-center px-2">
-                              <div className="flex items-center gap-2 text-orange-500">
-                                  <ListFilter size={18} /> <span className="text-xs font-black uppercase">Falta Receber Hoje</span>
+                          <div className="pt-4 border-t border-slate-100 space-y-2">
+                              <div className="flex justify-between items-center px-2">
+                                  <div className="flex items-center gap-2 text-orange-500">
+                                      <ListFilter size={18} /> <span className="text-xs font-black uppercase">Falta Receber (Vendas Normais)</span>
+                                  </div>
+                                  <span className="font-mono font-black text-orange-500">{formatBRL(todayBalance.pendente)}</span>
                               </div>
-                              <span className="font-mono font-black text-orange-500">{formatBRL(todayBalance.pendente)}</span>
+                              <div className="flex justify-between items-center px-2 opacity-70">
+                                  <div className="flex items-center gap-2 text-purple-600">
+                                      <Clock size={16} /> <span className="text-[10px] font-black uppercase">A Receber Futuramente (Encomendas)</span>
+                                  </div>
+                                  <span className="font-mono font-bold text-purple-600">{formatBRL(todayBalance.pendente_encomenda)}</span>
+                              </div>
                           </div>
                       </div>
                   </div>
@@ -927,6 +1003,17 @@ const BalcaoPOS = () => {
           {cart.length > 0 && (
               <div className="bg-white border-t border-slate-100 shadow-[0_-10px_40px_rgba(0,0,0,0.05)] p-4 space-y-4 overflow-y-auto max-h-[60vh] md:max-h-none z-20">
                   
+                  {/* 2. BLOCO DE ENCOMENDA ADICIONADO AQUI */}
+                  <div className="flex justify-between items-center bg-purple-50 p-3 rounded-2xl border border-purple-100">
+                      <div className="flex items-center gap-2 text-purple-700">
+                          <Clock size={16} /> <span className="text-[10px] font-black uppercase tracking-widest">Encomenda (Sinal)</span>
+                      </div>
+                      <label className="flex items-center gap-1.5 cursor-pointer">
+                          <input type="checkbox" checked={isPreOrder} onChange={e => { setIsPreOrder(e.target.checked); setPaymentStatus('paid'); }} className="accent-purple-600 w-4 h-4"/>
+                          <span className="text-[9px] font-black text-purple-600 uppercase">Ativar</span>
+                      </label>
+                  </div>
+
                   <div className="flex bg-slate-100 p-1 rounded-2xl">
                       <button onClick={() => setOrderType('balcao')} className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase flex items-center justify-center gap-2 transition-all ${orderType === 'balcao' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-400'}`}>
                           <Store size={16}/> Balcão
@@ -1015,7 +1102,10 @@ const BalcaoPOS = () => {
                   <div className="space-y-2">
                       <div className="flex bg-slate-100 p-1 rounded-xl">
                           <button onClick={() => setPaymentStatus('paid')} className={`flex-1 py-2 rounded-lg text-[10px] font-black uppercase transition-all ${paymentStatus === 'paid' ? 'bg-green-500 text-white shadow-sm' : 'text-slate-400'}`}>Pago</button>
-                          <button onClick={() => setPaymentStatus('pending')} className={`flex-1 py-2 rounded-lg text-[10px] font-black uppercase transition-all ${paymentStatus === 'pending' ? 'bg-orange-400 text-white shadow-sm' : 'text-slate-400'}`}>Pagar Depois</button>
+                          {/* ESCONDE O PAGAR DEPOIS SE FOR ENCOMENDA */}
+                          {!isPreOrder && (
+                              <button onClick={() => setPaymentStatus('pending')} className={`flex-1 py-2 rounded-lg text-[10px] font-black uppercase transition-all ${paymentStatus === 'pending' ? 'bg-orange-400 text-white shadow-sm' : 'text-slate-400'}`}>Pagar Depois</button>
+                          )}
                       </div>
 
                       {paymentStatus === 'paid' && (
@@ -1033,7 +1123,30 @@ const BalcaoPOS = () => {
                           </div>
                       )}
 
-                      {paymentMethod === 'Dinheiro' && paymentStatus === 'paid' && (
+                      {/* BLOCO DE SINAL DA ENCOMENDA */}
+                      {isPreOrder && paymentStatus === 'paid' && (
+                          <div className="flex items-center gap-2 p-3 bg-purple-50 rounded-xl border border-purple-200 animate-in slide-in-from-top-2 mt-2">
+                              <div className="flex-1">
+                                  <label className="text-[9px] font-black uppercase text-purple-700 block mb-1">Entrada (Sinal)</label>
+                                  <input 
+                                      type="number" 
+                                      className="w-full p-2 bg-white rounded-lg text-sm font-bold outline-none border border-purple-200 focus:border-purple-400" 
+                                      placeholder="R$ 0,00" 
+                                      value={downPayment} 
+                                      onChange={e => setDownPayment(e.target.value)} 
+                                  />
+                              </div>
+                              <div className="flex-1 text-right">
+                                  <span className="text-[9px] font-black uppercase text-purple-700 block mb-1">Restante (Pendente)</span>
+                                  <span className={`text-lg font-black font-mono text-purple-700`}>
+                                      {formatBRL(Math.max(0, finalTotal - Number(downPayment || 0)))}
+                                  </span>
+                              </div>
+                          </div>
+                      )}
+
+                      {/* BLOCO DE TROCO NORMAL (ESCONDIDO SE FOR ENCOMENDA) */}
+                      {!isPreOrder && paymentMethod === 'Dinheiro' && paymentStatus === 'paid' && (
                           <div className="flex items-center gap-2 p-3 bg-slate-50 rounded-xl border border-slate-200 animate-in slide-in-from-top-2 mt-2">
                               <div className="flex-1">
                                   <label className="text-[9px] font-black uppercase text-slate-400 block mb-1">Valor Recebido</label>
@@ -1059,7 +1172,7 @@ const BalcaoPOS = () => {
                       {orderType === 'delivery' && (
                           <div className="flex justify-between items-center mb-2 animate-in fade-in">
                               <span className="text-xs font-black uppercase text-slate-400 flex items-center gap-2">
-                                  Taxa de Entrega (Frete)
+                                  Taxa de Entrega
                                   {isCalculatingFee && <Loader2 size={12} className="animate-spin text-indigo-500" />}
                               </span>
                               <input 
