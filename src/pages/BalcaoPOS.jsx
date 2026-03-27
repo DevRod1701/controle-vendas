@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, ShoppingCart, Plus, Minus, X, User, CreditCard, Banknote, QrCode, Bike, Store, CheckCircle2, Loader2, Printer, History, ArrowLeft, Trash2, LogOut, Lock, ChevronDown, ChevronUp, Calculator, ListFilter, MessageSquare, AlertCircle, MapPin, Clock } from 'lucide-react';
+import { Search, ShoppingCart, Plus, Minus, X, User, CreditCard, Banknote, QrCode, Bike, Store, CheckCircle2, Loader2, Printer, History, ArrowLeft, Trash2, LogOut, Lock, ChevronDown, ChevronUp, Calculator, ListFilter, MessageSquare, AlertCircle, MapPin, Clock, Pencil } from 'lucide-react';
 import { useData } from '../contexts/DataContext';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../services/supabase';
@@ -15,11 +15,11 @@ import ConfirmModal from '../components/modals/ConfirmModal';
 // ==============================================================================
 const DELIVERY_CONFIG = {
     originCep: '03817125', 
-    originLat: -23.49138767727177, //-23.49138767727177, -46.49318473636381
+    originLat: -23.49138767727177,
     originLon: -46.49318473636381,
-    baseDistanceKm: 1.5,   // Distância base alterada para 1.5km
-    basePrice: 5.00,       // Preço da distância base
-    pricePerExtraKm: 1.00  // Valor por Km adicional
+    baseDistanceKm: 1.5,   
+    basePrice: 5.00,       
+    pricePerExtraKm: 1.00  
 };
 // ==============================================================================
 
@@ -59,12 +59,20 @@ const BalcaoPOS = () => {
   // ESTADOS DE ENCOMENDA
   const [isPreOrder, setIsPreOrder] = useState(false);
   const [downPayment, setDownPayment] = useState('');
+  const [preOrderDate, setPreOrderDate] = useState(''); 
+  const [preOrderPeriod, setPreOrderPeriod] = useState(''); 
+
+  // ESTADO DE DESCONTO
+  const [discountPercent, setDiscountPercent] = useState('');
 
   const [deliveryFee, setDeliveryFee] = useState(''); 
   const [isCalculatingFee, setIsCalculatingFee] = useState(false); 
   
   const [editingObsId, setEditingObsId] = useState(null);
   const [tempObs, setTempObs] = useState('');
+  
+  // MODAL DE EDIÇÃO DE OBS PÓS-VENDA
+  const [editObsModal, setEditObsModal] = useState({ isOpen: false, order: null, text: '' });
 
   const [customer, setCustomer] = useState({ id: null, name: '', phone: '', cpf: '', cep: '', street: '', number: '', neighborhood: '', complement: '' });
   const [customerSearch, setCustomerSearch] = useState('');
@@ -98,7 +106,6 @@ const BalcaoPOS = () => {
   const [pinError, setPinError] = useState('');
   const [pinAction, setPinAction] = useState({ type: null, payload: null }); 
 
-  // 1. FILTRO DE PRODUTOS: Esconde os que têm estoque <= 0
   const filteredProducts = useMemo(() => {
       let list = products.filter(p => p.stock > 0);
       if (search) {
@@ -118,10 +125,14 @@ const BalcaoPOS = () => {
       ).slice(0, 5); 
   }, [customers, customerSearch, customer.name]);
 
+  // CÁLCULOS MATEMÁTICOS
   const cartTotal = cart.reduce((acc, item) => acc + (item.price * item.qty), 0);
   const cartItemsCount = cart.reduce((acc, item) => acc + item.qty, 0);
   
-  const finalTotal = orderType === 'delivery' ? cartTotal + Number(deliveryFee || 0) : cartTotal;
+  const discountAmount = cartTotal * (Number(discountPercent || 0) / 100);
+  const subTotalWithDiscount = Math.max(0, cartTotal - discountAmount);
+
+  const finalTotal = orderType === 'delivery' ? subTotalWithDiscount + Number(deliveryFee || 0) : subTotalWithDiscount;
   const changeAmount = paymentMethod === 'Dinheiro' && cashReceived ? Math.max(0, Number(cashReceived) - finalTotal) : 0;
 
   const allPosOrders = useMemo(() => {
@@ -138,7 +149,6 @@ const BalcaoPOS = () => {
       return filtered.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
   }, [allPosOrders, historyFilter, filterDate, filterMonth]);
 
-  // 3. ATUALIZAÇÃO DO BALANÇO: Separa pendências normais de pendências de encomendas
   const todayBalance = useMemo(() => {
       const todayStr = getTodayLocal();
       const todayOrders = allPosOrders.filter(o => o.created_at.startsWith(todayStr));
@@ -164,7 +174,6 @@ const BalcaoPOS = () => {
       return totals;
   }, [allPosOrders]);
 
-  // --- CARRINHO COM TRAVA DE ESTOQUE ---
   const addToCart = (product) => {
       setCart(prev => {
           const exists = prev.find(i => i.id === product.id && !i.observation); 
@@ -226,12 +235,11 @@ const BalcaoPOS = () => {
       setCepWarning('');
       setUpdateAddress(false); 
       
-      // Gatilho Automático: Se puxou do banco e já tem rua, calcula o frete!
       if (c.cep && c.street) {
           calculateAutoDeliveryFee({
               logradouro: c.street,
               bairro: c.neighborhood,
-              localidade: 'São Paulo', // Fallback assumindo sua região base
+              localidade: 'São Paulo', 
               uf: 'SP'
           });
       } else {
@@ -245,12 +253,10 @@ const BalcaoPOS = () => {
           const city = addressData.localidade || 'São Paulo';
           const state = addressData.uf || 'SP';
           
-          // 1ª Tentativa: Busca pela Rua exata
           const streetQuery = `${addressData.logradouro}, ${city}, ${state}, Brazil`;
           let destRes = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(streetQuery)}&format=json&limit=1`);
           let destData = await destRes.json();
           
-          // 2ª Tentativa (Opcional): Se falhou na rua, busca pelo Bairro para dar uma estimativa
           if (!destData || destData.length === 0) {
               const neighborhoodQuery = `${addressData.bairro}, ${city}, ${state}, Brazil`;
               destRes = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(neighborhoodQuery)}&format=json&limit=1`);
@@ -325,11 +331,14 @@ const BalcaoPOS = () => {
           setAlertInfo({ type: 'error', title: 'Dados Incompletos', message: 'Preencha o Nome, Rua e Número para finalizar a entrega.' });
           return;
       }
+      if (isPreOrder && (!preOrderDate || !preOrderPeriod)) {
+          setAlertInfo({ type: 'error', title: 'Dados da Encomenda', message: 'Preencha a Data de Entrega e o Horário/Período da encomenda.' });
+          return;
+      }
       
       const finalCustomerName = customer.name.trim() || "Cliente Balcão";
       setIsSubmitting(true);
 
-      // Determina o valor pago na hora baseado se é encomenda (sinal) ou venda normal
       let paidAmount = 0;
       if (isPreOrder) {
           paidAmount = Math.min(finalTotal, Number(downPayment || 0));
@@ -344,7 +353,11 @@ const BalcaoPOS = () => {
           cash_received: (!isPreOrder && paymentMethod === 'Dinheiro' && paymentStatus === 'paid') ? Number(cashReceived) : 0,
           change_amount: !isPreOrder ? changeAmount : 0,
           delivery_fee: orderType === 'delivery' ? Number(deliveryFee || 0) : 0,
-          is_pre_order: isPreOrder // Tag que marca se foi encomenda
+          discount_percent: Number(discountPercent || 0), 
+          discount_amount: discountAmount,
+          is_pre_order: isPreOrder,
+          pre_order_date: isPreOrder ? preOrderDate : null,
+          pre_order_period: isPreOrder ? preOrderPeriod : null,
       };
 
       try {
@@ -385,7 +398,7 @@ const BalcaoPOS = () => {
               seller_name: profile?.full_name || 'Balcão',
               status: 'approved',
               total: finalTotal,
-              paid: paidAmount, // Registra apenas o que foi pago (Sinal ou Total)
+              paid: paidAmount, 
               type: 'sale',
               payment_method: paymentMethod,
               metadata: metadata
@@ -406,7 +419,6 @@ const BalcaoPOS = () => {
               await supabase.from('products').update({ stock: item.stock - item.qty }).eq('id', item.id);
           }
 
-          // Só lança no caixa o valor que realmente foi recebido
           if (paidAmount > 0) {
               await supabase.from('payments').insert([{
                   order_id: newOrder.id,
@@ -550,8 +562,34 @@ const BalcaoPOS = () => {
       }
   };
 
+  // FUNÇÃO PARA SALVAR A OBSERVAÇÃO EDITADA
+  const saveEditedObs = async () => {
+      setIsSubmitting(true);
+      try {
+          const updatedMetadata = {
+              ...editObsModal.order.metadata,
+              custom_observation: editObsModal.text
+          };
+
+          const { error } = await supabase
+              .from('orders')
+              .update({ metadata: updatedMetadata })
+              .eq('id', editObsModal.order.id);
+
+          if (error) throw error;
+
+          setAlertInfo({ type: 'success', title: 'Sucesso', message: 'Observação do pedido atualizada!' });
+          refreshData(); 
+          setEditObsModal({ isOpen: false, order: null, text: '' });
+      } catch (error) {
+          console.error(error);
+          setAlertInfo({ type: 'error', title: 'Erro', message: 'Não foi possível atualizar a observação.' });
+      } finally {
+          setIsSubmitting(false);
+      }
+  };
+
   const handleLogout = async () => {
-      // 3. Apenas trava se a pendência for normal (Não trava se for pendência de Encomenda)
       if (todayBalance.pendente > 0) {
           setAlertInfo({ 
               type: 'error', 
@@ -578,6 +616,14 @@ const BalcaoPOS = () => {
           });
       }
 
+      if (orderData.metadata?.discount_amount > 0) {
+          itemsToPrint.push({
+              name: `Desconto (${orderData.metadata.discount_percent}%)`,
+              qty: 1,
+              price: -(orderData.metadata.discount_amount)
+          });
+      }
+
       const isDelivery = orderData.metadata?.order_type === 'delivery';
       const custInfo = orderData.metadata?.customer_info;
       const html = pdvTemplate({ order: orderData, items: itemsToPrint, customerInfo: custInfo, isDelivery });
@@ -593,8 +639,11 @@ const BalcaoPOS = () => {
       setCepWarning('');
       setUpdateAddress(false);
       setDeliveryFee(''); 
-      setIsPreOrder(false); // Reseta encomenda
-      setDownPayment('');   // Reseta sinal
+      setDiscountPercent(''); 
+      setIsPreOrder(false); 
+      setDownPayment('');   
+      setPreOrderDate(''); 
+      setPreOrderPeriod(''); 
       setCashReceived('');
       setShowMobileCart(false);
       setSuccessOrder(null);
@@ -635,6 +684,7 @@ const BalcaoPOS = () => {
       <AlertModal isOpen={!!alertInfo} type={alertInfo?.type} title={alertInfo?.title} message={alertInfo?.message} onClose={() => setAlertInfo(null)} />
       <ConfirmModal isOpen={!!confirmDialog} title={confirmDialog?.title} message={confirmDialog?.message} onCancel={() => setConfirmDialog(null)} onConfirm={confirmDialog?.action} />
 
+      {/* MODAL DE PIN ADMIN */}
       {showPinModal && (
           <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[999] flex items-center justify-center p-4">
               <div className="bg-white w-full max-w-sm rounded-[2.5rem] p-6 shadow-2xl space-y-4">
@@ -655,6 +705,36 @@ const BalcaoPOS = () => {
                       <button onClick={() => setShowPinModal(false)} className="flex-1 py-3 bg-slate-100 text-slate-600 rounded-xl text-xs font-black uppercase">Cancelar</button>
                       <button onClick={executePinAction} disabled={isSubmitting || !adminPin} className="flex-1 py-3 bg-red-500 text-white rounded-xl text-xs font-black uppercase flex justify-center items-center gap-2 disabled:opacity-50">
                           {isSubmitting ? <Loader2 size={16} className="animate-spin" /> : 'Confirmar'}
+                      </button>
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {/* MODAL DE EDIÇÃO DE OBSERVAÇÃO GERAL */}
+      {editObsModal.isOpen && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[999] flex items-center justify-center p-4">
+              <div className="bg-white w-full max-w-sm rounded-[2.5rem] p-6 shadow-2xl space-y-4">
+                  <div className="flex items-center justify-between mb-2">
+                      <h3 className="text-lg font-black uppercase flex items-center gap-2">
+                          <MessageSquare size={20} className="text-indigo-500"/> Corrigir Observação
+                      </h3>
+                      <button onClick={() => setEditObsModal({ isOpen: false, order: null, text: '' })} className="p-2 bg-slate-100 rounded-full active:scale-90"><X size={16}/></button>
+                  </div>
+                  <p className="text-xs font-bold text-slate-500 leading-tight">
+                      Pedido #{editObsModal.order?.id.slice(0,6).toUpperCase()}
+                  </p>
+                  <textarea 
+                      className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl text-sm font-bold outline-none focus:border-indigo-400 resize-none h-32" 
+                      placeholder="Digite a observação geral para substituir a nota..." 
+                      value={editObsModal.text} 
+                      onChange={e => setEditObsModal({...editObsModal, text: e.target.value})} 
+                      autoFocus
+                  />
+                  <div className="flex gap-2 pt-2">
+                      <button onClick={() => setEditObsModal({ isOpen: false, order: null, text: '' })} className="flex-1 py-3 bg-slate-100 text-slate-600 rounded-xl text-xs font-black uppercase">Cancelar</button>
+                      <button onClick={saveEditedObs} disabled={isSubmitting} className="flex-1 py-3 bg-indigo-500 text-white rounded-xl text-xs font-black uppercase flex justify-center items-center gap-2 disabled:opacity-50">
+                          {isSubmitting ? <Loader2 size={16} className="animate-spin" /> : 'Salvar e Fechar'}
                       </button>
                   </div>
               </div>
@@ -801,9 +881,39 @@ const BalcaoPOS = () => {
 
                               {isExpanded && (
                                   <div className="p-4 pt-0 border-t border-slate-100 bg-slate-50/50">
+                                      
+                                      {/* MOSTRA DETALHES DA ENCOMENDA NO HISTÓRICO SE EXISTIR */}
+                                      {order.metadata?.is_pre_order && (
+                                          <div className="mt-3 p-3 bg-purple-100/50 border border-purple-200 rounded-xl flex items-center gap-2">
+                                              <Clock size={16} className="text-purple-600"/>
+                                              <p className="text-[10px] font-black uppercase text-purple-700">
+                                                  Agendado para: {new Date(order.metadata.pre_order_date + 'T12:00:00').toLocaleDateString('pt-BR')} - {order.metadata.pre_order_period}
+                                              </p>
+                                          </div>
+                                      )}
+
                                       <div className="mt-3 grid grid-cols-1 lg:grid-cols-2 gap-4">
                                           <div className="bg-white p-3 rounded-xl shadow-sm border border-slate-100">
-                                              <p className="text-[9px] font-black uppercase text-slate-400 mb-2 border-b border-slate-100 pb-1">Produtos</p>
+                                              
+                                              {/* BOTÃO DE EDITAR OBSERVAÇÃO */}
+                                              <div className="flex justify-between items-center mb-2 border-b border-slate-100 pb-1">
+                                                  <p className="text-[9px] font-black uppercase text-slate-400">Produtos</p>
+                                                  <button 
+                                                      onClick={() => setEditObsModal({ isOpen: true, order: order, text: order.metadata?.custom_observation || '' })} 
+                                                      className="text-[9px] text-indigo-500 font-bold flex items-center gap-1 hover:text-indigo-700 transition-colors"
+                                                  >
+                                                      <Pencil size={10} /> Corrigir Obs
+                                                  </button>
+                                              </div>
+
+                                              {/* MOSTRA OBSERVAÇÃO EDITADA NA TELA PARA VISUALIZAÇÃO FÁCIL */}
+                                              {order.metadata?.custom_observation && (
+                                                  <div className="mb-3 p-2 bg-yellow-50 border border-yellow-200 rounded-lg">
+                                                      <p className="text-[9px] font-black uppercase text-yellow-700 mb-0.5">Observação Atualizada:</p>
+                                                      <p className="text-xs font-bold text-yellow-800 italic leading-tight">{order.metadata.custom_observation}</p>
+                                                  </div>
+                                              )}
+
                                               {loadingItems ? <p className="text-xs text-slate-400 py-2">Carregando...</p> : 
                                                   orderItemsLoaded.map(item => (
                                                       <div key={item.id} className="flex justify-between text-xs text-slate-700 mb-1">
@@ -812,8 +922,16 @@ const BalcaoPOS = () => {
                                                       </div>
                                                   ))
                                               }
+
+                                              {order.metadata?.discount_percent > 0 && (
+                                                  <div className="flex justify-between text-xs text-red-500 mt-2 pt-2 border-t border-slate-100 font-bold">
+                                                      <span className="truncate pr-2">Desconto ({order.metadata.discount_percent}%)</span>
+                                                      <span className="font-mono flex-shrink-0">- {formatBRL(order.metadata.discount_amount)}</span>
+                                                  </div>
+                                              )}
+
                                               {order.metadata?.delivery_fee > 0 && (
-                                                  <div className="flex justify-between text-xs text-slate-700 mt-2 pt-2 border-t border-slate-100">
+                                                  <div className="flex justify-between text-xs text-slate-700 mt-1">
                                                       <span className="truncate pr-2">Taxa de Entrega</span>
                                                       <span className="font-mono font-bold flex-shrink-0">{formatBRL(order.metadata.delivery_fee)}</span>
                                                   </div>
@@ -964,10 +1082,17 @@ const BalcaoPOS = () => {
                   </div>
               ) : (
                   cart.map(item => (
-                      <div key={item.cartItemId} className="bg-white p-3 rounded-2xl shadow-sm border border-slate-100 flex items-center gap-3">
+                      <div key={item.cartItemId} className="bg-white p-3 rounded-2xl shadow-sm border border-slate-100 flex items-start gap-3">
                           <div className="flex-1 min-w-0">
-                              <p className="font-bold text-slate-800 text-xs truncate">{item.name}</p>
-                              <p className="font-mono text-indigo-600 font-black text-sm mb-1">{formatBRL(item.price * item.qty)}</p>
+                              <p className="font-bold text-slate-800 text-xs truncate leading-tight">{item.name}</p>
+                              
+                              {item.observation && !editingObsId && (
+                                  <p className="text-[10px] font-bold text-slate-500 italic mt-0.5 mb-0.5 leading-tight break-words whitespace-normal">
+                                      Obs: {item.observation}
+                                  </p>
+                              )}
+
+                              <p className="font-mono text-indigo-600 font-black text-sm mt-0.5 mb-1">{formatBRL(item.price * item.qty)}</p>
                               
                               {editingObsId === item.cartItemId ? (
                                   <div className="flex items-center gap-1 mt-1">
@@ -983,12 +1108,13 @@ const BalcaoPOS = () => {
                                       <button onClick={() => saveObservation(item.cartItemId)} className="p-1.5 bg-yellow-100 text-yellow-700 rounded hover:bg-yellow-200 transition-colors"><CheckCircle2 size={12}/></button>
                                   </div>
                               ) : (
-                                  <button onClick={() => { setEditingObsId(item.cartItemId); setTempObs(item.observation || ''); }} className="text-[9px] text-indigo-500 hover:text-indigo-700 underline font-bold flex items-center gap-1 mt-0.5">
-                                      <MessageSquare size={10} /> {item.observation ? `Obs: ${item.observation}` : 'Adicionar Obs'}
+                                  <button onClick={() => { setEditingObsId(item.cartItemId); setTempObs(item.observation || ''); }} className="text-[9px] text-indigo-400 hover:text-indigo-600 underline font-bold flex items-center gap-1 mt-0.5">
+                                      <MessageSquare size={10} /> {item.observation ? 'Editar Obs' : 'Adicionar Obs'}
                                   </button>
                               )}
                           </div>
-                          <div className="flex items-center gap-3 bg-slate-50 p-1.5 rounded-xl border border-slate-100">
+                          
+                          <div className="flex items-center gap-3 bg-slate-50 p-1.5 rounded-xl border border-slate-100 mt-0.5">
                               <button onClick={() => updateQty(item.cartItemId, -1)} className="w-8 h-8 bg-white rounded-lg shadow-sm flex items-center justify-center active:scale-90 transition-colors">
                                   {item.qty === 1 ? <Trash2 size={14} className="text-red-500"/> : <Minus size={14} className="text-slate-600"/>}
                               </button>
@@ -1003,15 +1129,40 @@ const BalcaoPOS = () => {
           {cart.length > 0 && (
               <div className="bg-white border-t border-slate-100 shadow-[0_-10px_40px_rgba(0,0,0,0.05)] p-4 space-y-4 overflow-y-auto max-h-[60vh] md:max-h-none z-20">
                   
-                  {/* 2. BLOCO DE ENCOMENDA ADICIONADO AQUI */}
-                  <div className="flex justify-between items-center bg-purple-50 p-3 rounded-2xl border border-purple-100">
-                      <div className="flex items-center gap-2 text-purple-700">
-                          <Clock size={16} /> <span className="text-[10px] font-black uppercase tracking-widest">Encomenda (Sinal)</span>
+                  <div className="bg-purple-50 rounded-2xl border border-purple-100 overflow-hidden transition-all">
+                      <div className="flex justify-between items-center p-3">
+                          <div className="flex items-center gap-2 text-purple-700">
+                              <Clock size={16} /> <span className="text-[10px] font-black uppercase tracking-widest">Encomenda (Sinal)</span>
+                          </div>
+                          <label className="flex items-center gap-1.5 cursor-pointer">
+                              <input type="checkbox" checked={isPreOrder} onChange={e => { setIsPreOrder(e.target.checked); setPaymentStatus('paid'); }} className="accent-purple-600 w-4 h-4"/>
+                              <span className="text-[9px] font-black text-purple-600 uppercase">Ativar</span>
+                          </label>
                       </div>
-                      <label className="flex items-center gap-1.5 cursor-pointer">
-                          <input type="checkbox" checked={isPreOrder} onChange={e => { setIsPreOrder(e.target.checked); setPaymentStatus('paid'); }} className="accent-purple-600 w-4 h-4"/>
-                          <span className="text-[9px] font-black text-purple-600 uppercase">Ativar</span>
-                      </label>
+                      
+                      {isPreOrder && (
+                          <div className="p-3 pt-0 grid grid-cols-2 gap-2 animate-in slide-in-from-top-2 border-t border-purple-200 mt-1">
+                              <div>
+                                  <label className="text-[9px] font-black text-purple-700 uppercase block mb-1 mt-2">Data Retirada/Entrega</label>
+                                  <input 
+                                      type="date" 
+                                      className="w-full p-2.5 bg-white border border-purple-200 rounded-xl text-xs font-bold outline-none focus:border-purple-400 text-slate-700" 
+                                      value={preOrderDate} 
+                                      onChange={e => setPreOrderDate(e.target.value)} 
+                                  />
+                              </div>
+                              <div>
+                                  <label className="text-[9px] font-black text-purple-700 uppercase block mb-1 mt-2">Horário/Período</label>
+                                  <input 
+                                      type="text" 
+                                      placeholder="Ex: Manhã, 14:30..."
+                                      className="w-full p-2.5 bg-white border border-purple-200 rounded-xl text-xs font-bold outline-none focus:border-purple-400 text-slate-700" 
+                                      value={preOrderPeriod} 
+                                      onChange={e => setPreOrderPeriod(e.target.value)} 
+                                  />
+                              </div>
+                          </div>
+                      )}
                   </div>
 
                   <div className="flex bg-slate-100 p-1 rounded-2xl">
@@ -1102,7 +1253,6 @@ const BalcaoPOS = () => {
                   <div className="space-y-2">
                       <div className="flex bg-slate-100 p-1 rounded-xl">
                           <button onClick={() => setPaymentStatus('paid')} className={`flex-1 py-2 rounded-lg text-[10px] font-black uppercase transition-all ${paymentStatus === 'paid' ? 'bg-green-500 text-white shadow-sm' : 'text-slate-400'}`}>Pago</button>
-                          {/* ESCONDE O PAGAR DEPOIS SE FOR ENCOMENDA */}
                           {!isPreOrder && (
                               <button onClick={() => setPaymentStatus('pending')} className={`flex-1 py-2 rounded-lg text-[10px] font-black uppercase transition-all ${paymentStatus === 'pending' ? 'bg-orange-400 text-white shadow-sm' : 'text-slate-400'}`}>Pagar Depois</button>
                           )}
@@ -1123,7 +1273,6 @@ const BalcaoPOS = () => {
                           </div>
                       )}
 
-                      {/* BLOCO DE SINAL DA ENCOMENDA */}
                       {isPreOrder && paymentStatus === 'paid' && (
                           <div className="flex items-center gap-2 p-3 bg-purple-50 rounded-xl border border-purple-200 animate-in slide-in-from-top-2 mt-2">
                               <div className="flex-1">
@@ -1145,7 +1294,6 @@ const BalcaoPOS = () => {
                           </div>
                       )}
 
-                      {/* BLOCO DE TROCO NORMAL (ESCONDIDO SE FOR ENCOMENDA) */}
                       {!isPreOrder && paymentMethod === 'Dinheiro' && paymentStatus === 'paid' && (
                           <div className="flex items-center gap-2 p-3 bg-slate-50 rounded-xl border border-slate-200 animate-in slide-in-from-top-2 mt-2">
                               <div className="flex-1">
@@ -1169,6 +1317,28 @@ const BalcaoPOS = () => {
                   </div>
 
                   <div className="pt-3 mt-1 border-t border-slate-100">
+                      
+                      <div className="flex justify-between items-center mb-2 animate-in fade-in">
+                          <span className="text-xs font-black uppercase text-slate-400">Desconto em Produtos (%)</span>
+                          <div className="relative w-24">
+                              <input 
+                                  type="number" 
+                                  className="w-full p-2 pr-6 bg-white rounded-lg text-sm font-bold outline-none border border-slate-200 focus:border-yellow-400 text-right text-red-500" 
+                                  placeholder="0" 
+                                  value={discountPercent} 
+                                  onChange={e => setDiscountPercent(e.target.value)} 
+                              />
+                              <span className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-bold">%</span>
+                          </div>
+                      </div>
+
+                      {Number(discountPercent) > 0 && (
+                          <div className="flex justify-between items-center mb-2 animate-in fade-in">
+                              <span className="text-[10px] font-black uppercase text-red-400">Desconto Aplicado</span>
+                              <span className="text-xs font-black font-mono text-red-500">- {formatBRL(discountAmount)}</span>
+                          </div>
+                      )}
+
                       {orderType === 'delivery' && (
                           <div className="flex justify-between items-center mb-2 animate-in fade-in">
                               <span className="text-xs font-black uppercase text-slate-400 flex items-center gap-2">
@@ -1184,16 +1354,16 @@ const BalcaoPOS = () => {
                               />
                           </div>
                       )}
-                      <div className="flex justify-between items-center mb-2">
-                          <span className="text-xs font-black uppercase text-slate-400">Total a Cobrar</span>
-                          <span className="text-2xl font-black font-mono text-slate-800">{formatBRL(finalTotal)}</span>
+                      <div className="flex justify-between items-center mb-2 mt-3 pt-3 border-t border-slate-100">
+                          <span className="text-sm font-black uppercase text-slate-600">Total a Cobrar</span>
+                          <span className="text-3xl font-black font-mono text-slate-800">{formatBRL(finalTotal)}</span>
                       </div>
                       <button 
                           onClick={handleCheckout} 
                           disabled={isSubmitting}
-                          className="w-full py-4 bg-yellow-400 text-slate-900 rounded-2xl font-black uppercase text-xs shadow-xl shadow-yellow-200/50 active:scale-95 transition-transform flex justify-center items-center gap-2 disabled:opacity-70"
+                          className="w-full py-4 mt-2 bg-yellow-400 text-slate-900 rounded-2xl font-black uppercase text-sm shadow-xl shadow-yellow-200/50 active:scale-95 transition-transform flex justify-center items-center gap-2 disabled:opacity-70"
                       >
-                          {isSubmitting ? <Loader2 size={18} className="animate-spin"/> : <><CheckCircle2 size={18}/> Concluir Pedido</>}
+                          {isSubmitting ? <Loader2 size={18} className="animate-spin"/> : <><CheckCircle2 size={20}/> Concluir Pedido</>}
                       </button>
                   </div>
               </div>
