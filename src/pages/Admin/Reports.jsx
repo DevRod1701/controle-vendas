@@ -18,7 +18,7 @@ const Reports = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { orders, payments, settlements, refreshData } = useData();
-  const { session, isAdmin, profile } = useAuth(); // <-- Adicionado profile aqui
+  const { session, isAdmin, profile } = useAuth(); 
 
   const [dateMode, setDateMode] = useState('month'); 
   const now = new Date();
@@ -37,27 +37,21 @@ const Reports = () => {
   const [selectedSellerState, setSelectedSellerState] = useState(initialSeller);
   const activeSeller = isAdmin ? selectedSellerState : session?.user?.id;
   
-  // NOVO ESTADO: Guarda a função (role) do usuário selecionado para saber se é balcão ou vendedor
   const [activeSellerRole, setActiveSellerRole] = useState(null);
-
   const [sellerSearch, setSellerSearch] = useState('');
   const [showSellerDropdown, setShowSellerDropdown] = useState(false);
-
   const [reportType, setReportType] = useState('full'); 
   const [expandRanking, setExpandRanking] = useState(false); 
-
   const [tempRate, setTempRate] = useState(20);
-  const [extraDiscount, setExtraDiscount] = useState('');
+  const [extraDiscountsList, setExtraDiscountsList] = useState([]);
   const [isSavingAcerto, setIsSavingAcerto] = useState(false);
-
   const [showPaymentForm, setShowPaymentForm] = useState(false);
   const [payAmount, setPayAmount] = useState('');
   const [payDate, setPayDate] = useState(new Date().toISOString().split('T')[0]);
-
   const monthsList = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
 
   useEffect(() => {
-      setExtraDiscount('');
+      setExtraDiscountsList([]);
       setShowPaymentForm(false);
   }, [activeSeller, selectedMonthStr]);
 
@@ -67,7 +61,6 @@ const Reports = () => {
     setShowMonthPicker(false); 
   };
 
-  // BUSCA O CARGO (ROLE) E A TAXA DO USUÁRIO SELECIONADO
   useEffect(() => {
       if (activeSeller !== 'all') {
           supabase.from('profiles').select('commission_rate, role').eq('id', activeSeller).single()
@@ -81,6 +74,18 @@ const Reports = () => {
           setActiveSellerRole(null);
       }
   }, [activeSeller]);
+
+  const handleAddDiscount = () => {
+      setExtraDiscountsList([...extraDiscountsList, { id: Date.now(), reason: '', amount: '' }]);
+  };
+
+  const handleUpdateDiscount = (id, field, value) => {
+      setExtraDiscountsList(prev => prev.map(d => d.id === id ? { ...d, [field]: value } : d));
+  };
+
+  const handleRemoveDiscount = (id) => {
+      setExtraDiscountsList(prev => prev.filter(d => d.id !== id));
+  };
 
   const filteredData = useMemo(() => {
     let start, end;
@@ -159,7 +164,6 @@ const Reports = () => {
     return { totalSales, totalReturnsValue, netSales, totalReceived, ranking: rankedProducts };
   }, [filteredData.orders, groupedPayments]);
 
-  // NOVO: Cálculo focado no resumo do Balcão (Sem comissão)
   const balcaoTotals = useMemo(() => {
       if (activeSellerRole !== 'balcao') return null;
       const totals = { Dinheiro: 0, Pix: 0, Cartão: 0, pendente: 0 };
@@ -190,16 +194,32 @@ const Reports = () => {
 
       const totalReceivedCash = filteredData.payments.filter(p => p.method !== 'Consumo').reduce((acc, p) => acc + Number(p.amount), 0);
       const totalConsumed = filteredData.payments.filter(p => p.method === 'Consumo').reduce((acc, p) => acc + Number(p.amount), 0);
-      
       const rate = Number(tempRate) || 0;
       const commissionGross = totalReceivedCash * (rate / 100);
-      const discount = Number(extraDiscount) || 0;
+      const totalExtraDiscounts = extraDiscountsList.reduce((acc, desc) => acc + Number(desc.amount || 0), 0);
       
-      const finalPayoutMonth = commissionGross - totalConsumed - discount;
-      const totalToPay = finalPayoutMonth + saldoAnterior;
+      const rawFinalPayoutMonth = commissionGross - totalConsumed - totalExtraDiscounts;
+      
+      let compensationApplied = 0;
+      if (rawFinalPayoutMonth < 0 && saldoAnterior > 0) {
+          compensationApplied = Math.min(Math.abs(rawFinalPayoutMonth), saldoAnterior);
+      }
+      
+      const finalPayoutMonth = rawFinalPayoutMonth + compensationApplied;
+      const totalToPay = finalPayoutMonth + (saldoAnterior - compensationApplied);
 
-      return { totalReceivedCash, totalConsumed, commissionGross, discount, finalPayoutMonth, totalToPay, rate };
-  }, [filteredData, activeSeller, dateMode, tempRate, extraDiscount, saldoAnterior]);
+      return { 
+          totalReceivedCash, 
+          totalConsumed, 
+          commissionGross, 
+          discount: totalExtraDiscounts, 
+          rawFinalPayoutMonth, 
+          compensationApplied, 
+          finalPayoutMonth, 
+          totalToPay, 
+          rate 
+      };
+  }, [filteredData, activeSeller, dateMode, tempRate, extraDiscountsList, saldoAnterior]);
 
   const currentSettlement = useMemo(() => {
       if (!settlements || activeSeller === 'all') return null;
@@ -208,14 +228,12 @@ const Reports = () => {
 
   const discrepancyDetails = useMemo(() => {
       if (!currentSettlement || !acertoPreview) return null;
-      
       const diffSales = Math.abs(Number(currentSettlement.total_sales) - stats.totalSales);
       const diffRec = Math.abs(Number(currentSettlement.total_received) - acertoPreview.totalReceivedCash);
       const diffCons = Math.abs(Number(currentSettlement.total_consumed) - acertoPreview.totalConsumed);
-
       if (diffSales > 0.01 || diffRec > 0.01 || diffCons > 0.01) {
           const newGross = acertoPreview.totalReceivedCash * (Number(currentSettlement.commission_rate) / 100);
-          const newPayoutMonth = newGross - acertoPreview.totalConsumed - Number(currentSettlement.extra_discount);
+          const newPayoutMonth = newGross - acertoPreview.totalConsumed - Number(currentSettlement.extra_discount); 
           return { needsUpdate: true, newGross, newPayoutMonth };
       }
       return { needsUpdate: false };
@@ -238,7 +256,50 @@ const Reports = () => {
 
   const handleSaveSettlement = async () => {
       if (!acertoPreview) return;
+      const validDiscounts = extraDiscountsList.filter(d => Number(d.amount) > 0);
       setIsSavingAcerto(true);
+
+      let remainingCompensation = acertoPreview.compensationApplied;
+
+      if (remainingCompensation > 0) {
+          const pendingPast = settlements
+              .filter(s => s.seller_id === activeSeller && s.month < selectedMonthStr && s.status !== 'paid')
+              .sort((a, b) => a.month.localeCompare(b.month));
+
+          const updates = [];
+          for (let s of pendingPast) {
+              if (remainingCompensation <= 0) break;
+              const debt = Number(s.final_payout) - Number(s.amount_paid);
+              
+              if (debt > 0) {
+                  const applied = Math.min(remainingCompensation, debt);
+                  remainingCompensation -= applied;
+
+                  const autoPayment = {
+                      id: Date.now().toString() + Math.random(),
+                      amount: applied,
+                      date: new Date().toISOString().split('T')[0],
+                      reason: `Compensação `,
+                      linked_month: selectedMonthStr, 
+                      is_auto: true
+                  };
+
+                  const newHistory = [...(s.payments_history || []), autoPayment];
+                  const newPaid = Number(s.amount_paid || 0) + applied;
+                  const newStatus = newPaid >= (Number(s.final_payout) - 0.01) ? 'paid' : 'pending';
+
+                  updates.push({ id: s.id, payments_history: newHistory, amount_paid: newPaid, status: newStatus });
+              }
+          }
+          for (let u of updates) {
+              await supabase.from('seller_settlements').update({
+                  payments_history: u.payments_history,
+                  amount_paid: u.amount_paid,
+                  status: u.status
+              }).eq('id', u.id);
+          }
+      }
+
       const payload = {
           seller_id: activeSeller,
           month: selectedMonthStr,
@@ -247,17 +308,18 @@ const Reports = () => {
           commission_rate: Number(tempRate),
           commission_gross: acertoPreview.commissionGross,
           total_consumed: acertoPreview.totalConsumed,
-          extra_discount: acertoPreview.discount,
+          extra_discount: acertoPreview.discount, 
+          extra_discounts_list: validDiscounts,   
           final_payout: acertoPreview.finalPayoutMonth,
           amount_paid: 0,
           payments_history: [],
-          status: acertoPreview.totalToPay <= 0 ? 'paid' : 'pending' 
+          status: acertoPreview.totalToPay <= 0.01 ? 'paid' : 'pending' 
       };
       
       const { error } = await supabase.from('seller_settlements').insert([payload]);
       if (error) alert("Erro ao salvar comissão.");
       else {
-          setExtraDiscount(''); 
+          setExtraDiscountsList([]); 
           refreshData();
       }
       setIsSavingAcerto(false);
@@ -266,9 +328,8 @@ const Reports = () => {
   const handleUpdateSettlement = async () => {
       if (!currentSettlement || !discrepancyDetails) return;
       setIsSavingAcerto(true);
-
       const newTotalToPay = discrepancyDetails.newPayoutMonth + saldoAnterior;
-      const newStatus = (currentSettlement.amount_paid || 0) >= newTotalToPay - 0.01 ? 'paid' : 'pending';
+      const newStatus = (currentSettlement.amount_paid || 0) >= (newTotalToPay - 0.01) ? 'paid' : 'pending';
 
       const { error } = await supabase.from('seller_settlements').update({
           total_sales: stats.totalSales,
@@ -281,59 +342,26 @@ const Reports = () => {
 
       if (!error) refreshData();
       else alert("Erro ao atualizar base da comissão.");
-      
       setIsSavingAcerto(false);
   };
 
   const handleDeleteSettlement = async () => {
       if (!currentSettlement) return;
-      if (!window.confirm("Tem certeza que deseja desfazer este fechamento? O histórico de pagamento de comissão deste mês será apagado para recalcular.")) return;
-      setIsSavingAcerto(true);
-      await supabase.from('seller_settlements').delete().eq('id', currentSettlement.id);
-      refreshData();
-      setExtraDiscount(''); 
-      setIsSavingAcerto(false);
-  };
-
-  const handleAddPayment = async () => {
-      if (!payAmount || Number(payAmount) <= 0) return;
+      if (!window.confirm("Atenção: Ao excluir este fechamento, todos os pagamentos em cascata e compensações que ele gerou em meses anteriores também serão desfeitos. Confirmar?")) return;
+      
       setIsSavingAcerto(true);
 
-      let remaining = Number(payAmount);
+      const allSellerSettlements = settlements.filter(s => s.seller_id === activeSeller && s.id !== currentSettlement.id);
       const updates = [];
 
-      const pendingPast = settlements
-          .filter(s => s.seller_id === activeSeller && s.month <= selectedMonthStr && s.status !== 'paid')
-          .sort((a, b) => a.month.localeCompare(b.month)); 
-
-      for (let s of pendingPast) {
-          if (remaining <= 0) break;
-
-          const debt = Number(s.final_payout) - Number(s.amount_paid);
-          if (debt > 0) {
-              const applied = Math.min(remaining, debt);
-              remaining -= applied;
-
-              const newHistory = [...(s.payments_history || []), { id: Date.now().toString() + Math.random(), amount: applied, date: payDate }];
-              const newPaid = Number(s.amount_paid || 0) + applied;
-              const newStatus = newPaid >= Number(s.final_payout) - 0.01 ? 'paid' : 'pending';
-
+      for (let s of allSellerSettlements) {
+          if (s.payments_history && s.payments_history.some(p => p.linked_month === currentSettlement.month)) {
+              const newHistory = s.payments_history.filter(p => p.linked_month !== currentSettlement.month);
+              const removedAmount = s.payments_history.filter(p => p.linked_month === currentSettlement.month).reduce((acc, p) => acc + Number(p.amount), 0);
+              
+              const newPaid = Math.max(0, Number(s.amount_paid || 0) - removedAmount);
+              const newStatus = newPaid >= (Number(s.final_payout) - 0.01) ? 'paid' : 'pending';
               updates.push({ id: s.id, payments_history: newHistory, amount_paid: newPaid, status: newStatus });
-          }
-      }
-
-      if (remaining > 0.01) {
-          const current = currentSettlement;
-          const existingUpdateIndex = updates.findIndex(u => u.id === current.id);
-          
-          if (existingUpdateIndex >= 0) {
-              updates[existingUpdateIndex].amount_paid += remaining;
-              const histLen = updates[existingUpdateIndex].payments_history.length;
-              updates[existingUpdateIndex].payments_history[histLen - 1].amount += remaining;
-          } else {
-              const newHistory = [...(current.payments_history || []), { id: Date.now().toString() + Math.random(), amount: remaining, date: payDate }];
-              const newPaid = Number(current.amount_paid || 0) + remaining;
-              updates.push({ id: current.id, payments_history: newHistory, amount_paid: newPaid, status: 'paid' }); 
           }
       }
 
@@ -343,6 +371,57 @@ const Reports = () => {
               amount_paid: u.amount_paid,
               status: u.status
           }).eq('id', u.id);
+      }
+
+      await supabase.from('seller_settlements').delete().eq('id', currentSettlement.id);
+      refreshData();
+      setExtraDiscountsList([]); 
+      setIsSavingAcerto(false);
+  };
+
+  const handleAddPayment = async () => {
+      if (!payAmount || Number(payAmount) < 0.01) return;
+      setIsSavingAcerto(true);
+
+      const totalPaidNow = Number(payAmount);
+      const paymentDate = payDate;
+      const paymentId = Date.now().toString() + Math.random();
+
+      // 1. Pegamos o fechamento do mês que estamos vendo agora
+      const current = currentSettlement;
+      if (!current) {
+          setIsSavingAcerto(false);
+          return;
+      }
+
+      // 2. Criamos o novo histórico incluindo o valor CHEIO que você digitou
+      const newHistory = [...(current.payments_history || []), { 
+          id: paymentId, 
+          amount: totalPaidNow, 
+          date: paymentDate,
+          reason: 'Acerto Manual',
+          linked_month: selectedMonthStr 
+      }];
+
+      // 3. Calculamos o novo total pago acumulado neste mês
+      const newAmountPaidAccumulated = Number(current.amount_paid || 0) + totalPaidNow;
+
+      // 4. Verificamos se quitou (considerando o Líquido + Saldo Anterior)
+      const totalToPayInThisMonth = Number(current.final_payout) + saldoAnterior;
+      
+      // Se o que já foi pago + o que está sendo pago agora cobre a dívida (com margem de erro)
+      const isPaid = newAmountPaidAccumulated >= (totalToPayInThisMonth - 0.01);
+
+      // 5. Atualizamos APENAS o registro do mês atual com o valor literal
+      const { error } = await supabase.from('seller_settlements').update({
+          payments_history: newHistory,
+          amount_paid: newAmountPaidAccumulated,
+          status: isPaid ? 'paid' : 'pending'
+      }).eq('id', current.id);
+
+      if (error) {
+          console.error("Erro ao salvar pagamento:", error);
+          alert("Erro ao registrar pagamento.");
       }
 
       setShowPaymentForm(false);
@@ -366,7 +445,7 @@ const Reports = () => {
       const newAmountPaid = Math.max(0, Number(currentSettlement.amount_paid || 0) - Number(paymentToRemove.amount));
       
       const currentTotalToPay = Number(currentSettlement.final_payout) + saldoAnterior;
-      const newStatus = newAmountPaid >= currentTotalToPay - 0.01 ? 'paid' : 'pending';
+      const newStatus = newAmountPaid >= (currentTotalToPay - 0.01) ? 'paid' : 'pending';
 
       await supabase.from('seller_settlements').update({
           payments_history: newHistory,
@@ -378,8 +457,28 @@ const Reports = () => {
       setIsSavingAcerto(false);
   };
 
+  const currentRenderDetails = useMemo(() => {
+      if (!currentSettlement) return { rawNet: 0, compensation: 0 };
+      
+      const rawGross = Number(currentSettlement.commission_gross) || 0;
+      const consumed = Number(currentSettlement.total_consumed) || 0;
+      let totalDiscounts = 0;
+      if (currentSettlement.extra_discounts_list?.length > 0) {
+          totalDiscounts = currentSettlement.extra_discounts_list.reduce((acc, d) => acc + Number(d.amount), 0);
+      } else {
+          totalDiscounts = Number(currentSettlement.extra_discount) || 0;
+      }
+      
+      const rawNet = rawGross - consumed - totalDiscounts;
+      const finalPayout = Number(currentSettlement.final_payout) || 0;
+      
+      const compensation = Math.max(0, finalPayout - rawNet);
+      
+      return { rawNet, compensation };
+  }, [currentSettlement]);
+
   const handleShareHolerite = () => {
-      if (!currentSettlement) return;
+      if (!currentSettlement || !currentRenderDetails) return;
       
       const paymentsText = (currentSettlement.payments_history || []).length > 0 
           ? `\n\n💳 *Pagamentos Efetuados:*\n` + currentSettlement.payments_history.map(p => `• ${new Date(p.date).toLocaleDateString('pt-BR')}: ${formatBRL(p.amount)}`).join('\n')
@@ -392,6 +491,17 @@ const Reports = () => {
       if (saldoAnterior > 0) saldoAntStr = `➕ Saldo Atrasado Anterior: ${formatBRL(saldoAnterior)}\n`;
       else if (saldoAnterior < 0) saldoAntStr = `➖ Adiantamentos Anteriores: ${formatBRL(Math.abs(saldoAnterior))}\n`;
 
+      let discountsText = '';
+      if (currentSettlement.extra_discounts_list && currentSettlement.extra_discounts_list.length > 0) {
+          discountsText = currentSettlement.extra_discounts_list.map(d => `➖ ${d.reason || 'Desconto'}: ${formatBRL(d.amount)}`).join('\n') + '\n';
+      } else if (currentSettlement.extra_discount > 0) {
+          discountsText = `➖ Descontos Extras: ${formatBRL(currentSettlement.extra_discount)}\n`;
+      }
+
+      const compensationText = currentRenderDetails.compensation > 0.01 
+          ? `➕ Quitação Dívida Passada: ${formatBRL(currentRenderDetails.compensation)}\n` 
+          : '';
+
       const text = `*COMISSÃO* 💰\n` +
           `Vendedor: *${currentSellerName}*\n` +
           `Período: *${selectedMonthStr}*\n\n` +
@@ -400,7 +510,8 @@ const Reports = () => {
           `📊 Taxa de Comissão: ${currentSettlement.commission_rate}%\n` +
           `➕ Comissão Bruta: ${formatBRL(currentSettlement.commission_gross)}\n` +
           `➖ Consumo Próprio: ${formatBRL(currentSettlement.total_consumed)}\n` +
-          (currentSettlement.extra_discount > 0 ? `➖ Descontos Extras: ${formatBRL(currentSettlement.extra_discount)}\n` : '') +
+          discountsText +
+          compensationText +
           `-----------------------------\n` +
           `💰 *Líquido do Mês: ${formatBRL(currentSettlement.final_payout)}*\n` +
           saldoAntStr +
@@ -408,7 +519,7 @@ const Reports = () => {
           paymentsText +
           `\n\n-----------------------------\n` +
           `✅ *JÁ PAGO: ${formatBRL(currentSettlement.amount_paid || 0)}*\n` +
-          (remaining > 0 ? `⚠️ *FALTA PAGAR: ${formatBRL(remaining)}*\n` : `🎉 *CRÉDITO DE ADIANTAMENTO: ${formatBRL(Math.abs(remaining))}*\n`) +
+          (remaining > 0.01 ? `⚠️ *FALTA PAGAR: ${formatBRL(remaining)}*\n` : (remaining < -0.01 ? `🎉 *CRÉDITO DE ADIANTAMENTO: ${formatBRL(Math.abs(remaining))}*\n` : `🎉 *QUITADO!* \n`)) +
           `-----------------------------`;
 
       const link = `https://wa.me/?text=${encodeURIComponent(text)}`;
@@ -416,7 +527,7 @@ const Reports = () => {
   };
 
   const handlePrintHolerite = () => {
-      if (!currentSettlement) return;
+      if (!currentSettlement || !currentRenderDetails) return;
       
       const remaining = Number(currentSettlement.final_payout) + saldoAnterior - (currentSettlement.amount_paid || 0);
       
@@ -424,23 +535,21 @@ const Reports = () => {
       if (saldoAnterior > 0) saldoAntStr = `<div class="row"><span>(+) Saldo Anterior:</span><span>${formatBRL(saldoAnterior)}</span></div>`;
       else if (saldoAnterior < 0) saldoAntStr = `<div class="row"><span>(-) Adiantamentos:</span><span>${formatBRL(Math.abs(saldoAnterior))}</span></div>`;
 
-      const extraDiscountStr = currentSettlement.extra_discount > 0 
-          ? `<div class="row"><span>(-) Desc. Extra:</span><span>${formatBRL(currentSettlement.extra_discount)}</span></div>` 
-          : '';
-
       const htmlContent = commissionTemplate({
-          currentSellerName,
-          selectedMonthStr,
+          sellerName: currentSellerName,
+          monthName: selectedMonthStr,
           totalSales: formatBRL(currentSettlement.total_sales),
-          totalReceived: formatBRL(currentSettlement.total_received),
+          totalReceivedCash: formatBRL(currentSettlement.total_received),
           commissionRate: currentSettlement.commission_rate,
           commissionGross: formatBRL(currentSettlement.commission_gross),
           totalConsumed: formatBRL(currentSettlement.total_consumed),
-          extraDiscountStr,
+          extraDiscountsList: currentSettlement.extra_discounts_list || [],
+          legacyExtraDiscount: currentSettlement.extra_discount,
+          compensationApplied: currentRenderDetails.compensation,
           finalPayout: formatBRL(currentSettlement.final_payout),
           saldoAntStr,
           amountPaid: formatBRL(currentSettlement.amount_paid || 0),
-          remainingLabel: remaining > 0 ? 'FALTA PAGAR' : 'CRÉDITO',
+          remainingLabel: remaining > 0.01 ? 'FALTA PAGAR' : 'CRÉDITO',
           remainingStr: formatBRL(Math.abs(remaining))
       });
 
@@ -548,7 +657,6 @@ const Reports = () => {
         </div>
       </div>
 
-      {/* BLOCO ESPECÍFICO DO BALCÃO (ESCONDE A COMISSÃO E MOSTRA O RESUMO DO PDV) */}
       {dateMode === 'month' && activeSeller !== 'all' && activeSellerRole === 'balcao' && balcaoTotals && (
           <div className="bg-white border-2 border-indigo-100 p-6 rounded-[2.5rem] space-y-4 shadow-lg shadow-indigo-50 mb-6 animate-in fade-in">
              <div className="flex justify-between items-center">
@@ -582,7 +690,6 @@ const Reports = () => {
           </div>
       )}
 
-      {/* BLOCO ORIGINAL DO VENDEDOR (COMISSÃO) */}
       {dateMode === 'month' && activeSeller !== 'all' && activeSellerRole !== 'balcao' && acertoPreview && (
           <div className="mb-6 animate-in fade-in">
               {currentSettlement ? (
@@ -620,19 +727,41 @@ const Reports = () => {
                           <div className="flex justify-between text-xs font-bold text-slate-400"><span>Vendas Dinheiro/Pix:</span> <span>{formatBRL(currentSettlement.total_received)}</span></div>
                           <div className="flex justify-between text-xs font-black text-yellow-400 pt-1"><span>Comissão Bruta ({currentSettlement.commission_rate}%):</span> <span>{formatBRL(currentSettlement.commission_gross)}</span></div>
                           <div className="flex justify-between text-xs font-bold pt-1 text-slate-300"><span>(-) Consumo Próprio:</span> <span>{formatBRL(currentSettlement.total_consumed)}</span></div>
-                          {currentSettlement.extra_discount > 0 && <div className="flex justify-between text-xs font-bold text-slate-300"><span>(-) Descontos Extras:</span> <span>{formatBRL(currentSettlement.extra_discount)}</span></div>}
                           
-                          <div className="flex justify-between font-bold text-slate-100 bg-white/10 p-2 mt-1 rounded-lg">
-                              <span className="text-xs uppercase">Líquido do Mês:</span> <span className="font-mono">{formatBRL(currentSettlement.final_payout)}</span>
+                          {currentSettlement.extra_discounts_list && currentSettlement.extra_discounts_list.length > 0 ? (
+                              currentSettlement.extra_discounts_list.map((d, i) => (
+                                  <div key={i} className="flex justify-between text-xs font-bold text-rose-300 pt-1">
+                                      <span>(-) {d.reason || 'Desconto Extra'}:</span> 
+                                      <span>{formatBRL(d.amount)}</span>
+                                  </div>
+                              ))
+                          ) : (
+                              currentSettlement.extra_discount > 0 && (
+                                  <div className="flex justify-between text-xs font-bold text-rose-300 pt-1">
+                                      <span>(-) Descontos Extras:</span> 
+                                      <span>{formatBRL(currentSettlement.extra_discount)}</span>
+                                  </div>
+                              )
+                          )}
+
+                          {currentRenderDetails.compensation > 0.01 && (
+                              <div className="flex justify-between text-xs font-bold text-emerald-400 pt-1 border-t border-slate-600 mt-1">
+                                  <span>(+) Quitação de Dívida Passada:</span> 
+                                  <span>{formatBRL(currentRenderDetails.compensation)}</span>
+                              </div>
+                          )}
+                          
+                          <div className="flex justify-between font-bold text-slate-100 bg-white/10 p-2 mt-2 rounded-lg">
+                              <span className="text-xs uppercase">Líquido Final do Mês:</span> <span className="font-mono">{formatBRL(currentSettlement.final_payout)}</span>
                           </div>
 
-                          {saldoAnterior > 0 && (
+                          {saldoAnterior > 0.01 && (
                               <div className="flex justify-between text-xs text-amber-400 font-bold mt-2">
                                   <span>(+) Saldo Atrasado Anterior:</span>
                                   <span className="font-mono">{formatBRL(saldoAnterior)}</span>
                               </div>
                           )}
-                          {saldoAnterior < 0 && (
+                          {saldoAnterior < -0.01 && (
                               <div className="flex justify-between text-xs text-red-400 font-bold mt-2">
                                   <span>(-) Adiantamentos Anteriores:</span>
                                   <span className="font-mono">{formatBRL(Math.abs(saldoAnterior))}</span>
@@ -673,12 +802,18 @@ const Reports = () => {
                               {(currentSettlement.payments_history || []).map(p => (
                                   <div key={p.id} className="flex justify-between items-center p-2 bg-slate-50 rounded-xl border border-slate-100">
                                       <div className="flex items-center gap-2">
-                                          <div className="w-6 h-6 bg-green-100 text-green-600 rounded-full flex items-center justify-center"><DollarSign size={12}/></div>
-                                          <span className="text-xs font-bold text-slate-600">{new Date(p.date).toLocaleDateString()}</span>
+                                          <div className={`w-6 h-6 rounded-full flex items-center justify-center ${p.is_auto ? 'bg-purple-100 text-purple-600' : 'bg-green-100 text-green-600'}`}><DollarSign size={12}/></div>
+                                          <div>
+                                              <span className="font-bold text-slate-700 block leading-tight">
+                                                  {p.reason || 'Pagamento Manual'}
+                                                  {p.is_auto && <span className="ml-2 text-[8px] bg-purple-100 text-purple-600 px-1 py-0.5 rounded uppercase">Auto</span>}
+                                              </span>
+                                              <span className="text-[9px] text-slate-400">{new Date(p.date).toLocaleDateString('pt-BR')}</span>
+                                          </div>
                                       </div>
                                       <div className="flex items-center gap-3">
                                           <span className="font-mono font-black text-green-600">{formatBRL(p.amount)}</span>
-                                          {isAdmin && <button onClick={() => handleRemovePayment(p.id)} className="text-red-300 hover:text-red-500 p-1"><Trash2 size={14}/></button>}
+                                          {isAdmin && !p.is_auto && <button onClick={() => handleRemovePayment(p.id)} className="text-red-300 hover:text-red-500 p-1"><Trash2 size={14}/></button>}
                                       </div>
                                   </div>
                               ))}
@@ -688,7 +823,7 @@ const Reports = () => {
                               <span className="font-black uppercase text-[10px] text-slate-400">
                                   {(Number(currentSettlement.final_payout) + saldoAnterior - (currentSettlement.amount_paid || 0)) < -0.01 ? 'Crédito (Adiantamento)' : 'Falta Pagar'}
                               </span>
-                              <span className={`font-mono text-xl font-black ${currentSettlement.status === 'paid' ? 'text-green-500' : 'text-red-500'}`}>
+                              <span className={`font-mono text-xl font-black ${ (Number(currentSettlement.final_payout) + saldoAnterior - (currentSettlement.amount_paid || 0)) < 0.01 ? 'text-green-500' : 'text-red-500'}`}>
                                   {formatBRL(Math.abs(Number(currentSettlement.final_payout) + saldoAnterior - (currentSettlement.amount_paid || 0)))}
                               </span>
                           </div>
@@ -724,21 +859,31 @@ const Reports = () => {
                           </div>
                           <div className="flex justify-between font-bold text-red-500"><span>(-) Consumo Próprio:</span> <span className="font-mono">{formatBRL(acertoPreview.totalConsumed)}</span></div>
                           
-                          {!isAdmin && acertoPreview.discount > 0 && (
-                              <div className="flex justify-between font-bold text-red-500 text-xs"><span>(-) Descontos Extras:</span> <span className="font-mono">{formatBRL(acertoPreview.discount)}</span></div>
+                          {extraDiscountsList.map((d, i) => (
+                              Number(d.amount) > 0 && (
+                                  <div key={i} className="flex justify-between font-bold text-rose-500 text-xs border-t border-slate-100 mt-1 pt-2">
+                                      <span>(-) {d.reason || 'Desconto'}:</span> <span className="font-mono">{formatBRL(d.amount)}</span>
+                                  </div>
+                              )
+                          ))}
+
+                          {acertoPreview.compensationApplied > 0.01 && (
+                              <div className="flex justify-between font-bold text-emerald-500 text-xs border-t border-slate-100 mt-1 pt-2">
+                                  <span>(+) Quitação de Dívida Passada:</span> <span className="font-mono">{formatBRL(acertoPreview.compensationApplied)}</span>
+                              </div>
                           )}
 
                           <div className="flex justify-between font-bold text-slate-800 bg-slate-100 p-2 mt-1 rounded-lg">
-                              <span>Líquido do Mês:</span> <span className="font-mono">{formatBRL(acertoPreview.finalPayoutMonth)}</span>
+                              <span>Líquido Final do Mês:</span> <span className="font-mono">{formatBRL(acertoPreview.finalPayoutMonth)}</span>
                           </div>
 
-                          {saldoAnterior > 0 && (
+                          {saldoAnterior > 0.01 && (
                               <div className="flex justify-between text-xs text-amber-600 font-bold mt-2">
                                   <span>(+) Saldo Atrasado Anterior:</span>
                                   <span className="font-mono">{formatBRL(saldoAnterior)}</span>
                               </div>
                           )}
-                          {saldoAnterior < 0 && (
+                          {saldoAnterior < -0.01 && (
                               <div className="flex justify-between text-xs text-red-500 font-bold mt-2">
                                   <span>(-) Adiantamentos Anteriores:</span>
                                   <span className="font-mono">{formatBRL(Math.abs(saldoAnterior))}</span>
@@ -747,15 +892,48 @@ const Reports = () => {
                       </div>
 
                       {isAdmin && (
-                          <div className="space-y-3 pt-3 border-t border-slate-100">
-                              <div className="flex gap-2">
-                                  <div className="flex-1 space-y-1">
-                                      <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Taxa (%)</label>
-                                      <input type="number" className="w-full p-3 bg-slate-50 rounded-xl font-bold outline-none" value={tempRate} onChange={e => setTempRate(e.target.value)} />
+                          <div className="space-y-4 pt-3 border-t border-slate-100 mt-2">
+                              <div className="space-y-1">
+                                  <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Taxa de Comissão (%)</label>
+                                  <input type="number" className="w-full p-3 bg-slate-50 rounded-xl font-bold outline-none" value={tempRate} onChange={e => setTempRate(e.target.value)} />
+                              </div>
+                              
+                              <div className="bg-rose-50 p-3 rounded-2xl border border-rose-100 space-y-2">
+                                  <div className="flex justify-between items-center ml-1">
+                                      <label className="text-[10px] font-black text-rose-500 uppercase flex items-center gap-1">
+                                          Descontos Extras
+                                      </label>
+                                      <button onClick={handleAddDiscount} className="text-[9px] font-black uppercase bg-rose-100 text-rose-600 px-2 py-1 rounded-lg flex items-center gap-1 active:scale-95">
+                                          <Plus size={10}/> Adicionar
+                                      </button>
                                   </div>
-                                  <div className="flex-1 space-y-1">
-                                      <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Desconto Extra (R$)</label>
-                                      <input type="number" className="w-full p-3 bg-slate-50 rounded-xl font-bold outline-none focus:border-red-400 border border-transparent" value={extraDiscount} onChange={e => setExtraDiscount(e.target.value)} placeholder="0,00"/>
+                                  
+                                  {extraDiscountsList.length === 0 && (
+                                      <p className="text-[9px] text-rose-400 font-bold italic text-center pb-1 pt-1">Nenhum desconto extra adicionado.</p>
+                                  )}
+
+                                  <div className="space-y-2">
+                                      {extraDiscountsList.map((discount) => (
+                                          <div key={discount.id} className="flex gap-2 animate-in slide-in-from-top-2">
+                                              <input 
+                                                  type="text" 
+                                                  placeholder="Motivo (ex: Vale)"
+                                                  className="flex-1 min-w-0 p-2 bg-white rounded-lg text-xs font-bold outline-none border border-rose-100 focus:border-rose-400"
+                                                  value={discount.reason}
+                                                  onChange={(e) => handleUpdateDiscount(discount.id, 'reason', e.target.value)}
+                                              />
+                                              <input 
+                                                  type="number" 
+                                                  placeholder="R$"
+                                                  className="w-20 p-2 bg-white rounded-lg text-xs font-bold outline-none border border-rose-100 focus:border-rose-400"
+                                                  value={discount.amount}
+                                                  onChange={(e) => handleUpdateDiscount(discount.id, 'amount', e.target.value)}
+                                              />
+                                              <button onClick={() => handleRemoveDiscount(discount.id)} className="p-2 text-rose-400 hover:text-rose-600 bg-white rounded-lg border border-rose-100">
+                                                  <Trash2 size={14}/>
+                                              </button>
+                                          </div>
+                                      ))}
                                   </div>
                               </div>
                           </div>

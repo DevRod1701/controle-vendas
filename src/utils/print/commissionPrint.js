@@ -1,21 +1,15 @@
 import { formatBRL } from '../formatters';
 
-export const commissionTemplate = ({ 
+export const commissionPrint = ({ 
     sellerName, 
     monthName, 
     totalSales, 
     totalReceivedCash, 
     commissionRate, 
-    commissionGross, 
+    commissionOnReceived, 
     totalConsumed, 
-    extraDiscountsList = [], 
-    legacyExtraDiscount = 0,
-    compensationApplied = 0, // NOVO CAMPO
-    finalPayout,
-    saldoAntStr = '',
-    amountPaid,
-    remainingLabel,
-    remainingStr
+    extraDiscountsList, 
+    finalPayout 
 }) => {
     
     const styles = `
@@ -38,34 +32,17 @@ export const commissionTemplate = ({
       .divider-thick { border-top: 2px solid #000; margin: 10px 0; }
       .row { display: flex; justify-content: space-between; margin-bottom: 4px; }
       .bold { font-weight: 900; }
-      .total { font-size: 18px; font-weight: 900; text-align: right; margin-top: 10px; }
+      .total { font-size: 20px; font-weight: 900; text-align: right; margin-top: 10px; }
       .close-btn { width: 100%; padding: 10px; background: #000; color: #fff; text-align: center; margin-bottom: 10px; cursor: pointer; border: none; font-weight: bold; }
       @media print { .close-btn { display: none; } }
     `;
 
-    let discountsHtml = '';
-    if (extraDiscountsList && extraDiscountsList.length > 0) {
-        discountsHtml = extraDiscountsList.map(desc => `
-          <div class="row" style="font-size: 11px;">
-              <span>(-) ${desc.reason || 'Desconto'}:</span>
-              <span>${formatBRL(desc.amount)}</span>
-          </div>
-        `).join('');
-    } else if (Number(legacyExtraDiscount) > 0) {
-        discountsHtml = `
-          <div class="row" style="font-size: 11px;">
-              <span>(-) Descontos Extras:</span>
-              <span>${formatBRL(legacyExtraDiscount)}</span>
-          </div>
-        `;
-    }
-
-    const compensationHtml = compensationApplied > 0.01 ? `
-        <div class="row bold" style="font-size: 12px; margin-top: 4px;">
-            <span>(+) Quitação Dívida Passada:</span>
-            <span>${formatBRL(compensationApplied)}</span>
-        </div>
-    ` : '';
+    const discountsHtml = extraDiscountsList.map(desc => `
+      <div class="row" style="font-size: 11px;">
+          <span>(-) ${desc.reason || 'Desconto Extra'}:</span>
+          <span>${formatBRL(desc.amount)}</span>
+      </div>
+    `).join('');
 
     return `
       <!DOCTYPE html>
@@ -77,7 +54,7 @@ export const commissionTemplate = ({
       <body>
         <button onclick="window.close()" class="close-btn">FECHAR IMPRESSÃO</button>
         
-        <h2>ACERTO DE COMISSÃO</h2>
+        <h2>ACERTO DE CONTAS</h2>
         <div class="text-center" style="font-size: 14px;">${sellerName}</div>
         <div class="text-center" style="font-size: 12px; margin-bottom: 10px;">${monthName}</div>
         
@@ -85,11 +62,11 @@ export const commissionTemplate = ({
         
         <div class="row">
             <span>Total de Vendas:</span>
-            <span>${totalSales}</span>
+            <span>${formatBRL(totalSales)}</span>
         </div>
         <div class="row">
             <span>Vendas Dinheiro/Pix:</span>
-            <span>${totalReceivedCash}</span>
+            <span>${formatBRL(totalReceivedCash)}</span>
         </div>
         <div class="row">
             <span>Taxa Aplicada:</span>
@@ -100,43 +77,28 @@ export const commissionTemplate = ({
         
         <div class="row bold" style="font-size: 14px;">
             <span>Comissão Bruta:</span>
-            <span>${commissionGross}</span>
+            <span>${formatBRL(commissionOnReceived)}</span>
         </div>
         
         <div class="divider"></div>
         
         <div class="row">
             <span>(-) Consumo:</span>
-            <span>${totalConsumed}</span>
+            <span>${formatBRL(totalConsumed)}</span>
         </div>
         
         ${discountsHtml}
-        ${compensationHtml}
         
         <div class="divider-thick"></div>
+        <div class="total">A PAGAR: ${formatBRL(finalPayout)}</div>
         
-        ${saldoAntStr}
-        
-        <div class="row bold" style="margin-top: 5px;">
-            <span>LÍQUIDO A RECEBER:</span>
-            <span>${finalPayout}</span>
-        </div>
-
-        <div class="divider"></div>
-        <div class="row">
-            <span>JÁ PAGO:</span>
-            <span>${amountPaid}</span>
-        </div>
-        <div class="row bold" style="font-size: 14px;">
-            <span>${remainingLabel}:</span>
-            <span>${remainingStr}</span>
-        </div>
-        
-        <div style="text-align: center; font-size: 10px; margin-top: 25px;">Gerado em ${new Date().toLocaleString('pt-BR')}</div>
-        <div style="text-align: center; font-size: 10px; margin-top: 30px; padding-top: 10px; border-top: 1px solid #000;">Assinatura do Colaborador</div>
+        <div style="text-align: center; font-size: 10px; margin-top: 20px;">Gerado em ${new Date().toLocaleString('pt-BR')}</div>
+        <div style="text-align: center; font-size: 10px; margin-top: 20px; padding-top: 20px; border-top: 1px solid #000;">Assinatura do Colaborador</div>
         
         <script>
-            window.onload = function() { setTimeout(function() { window.print(); }, 500); };
+            window.onload = function() { 
+                setTimeout(function() { window.print(); }, 500); 
+            };
         </script>
       </body>
       </html>
