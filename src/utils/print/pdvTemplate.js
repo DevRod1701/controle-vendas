@@ -207,20 +207,27 @@ export const pdvTemplate = ({ order, items, customerInfo, isDelivery }) => {
         
         <script>
             window.onload = function() { 
-                // Pequeno delay para garantir que o CSS carregou antes de abrir a tela de print
                 setTimeout(function() { 
                     window.print(); 
-                    
-                    // O evento 'afterprint' dispara quando a janela de impressão fecha
-                    // Se o navegador não suportar, o setTimeout de 3 segundos garante o fechamento
-                    window.onafterprint = function() {
-                        window.close();
-                    };
 
-                    // Backup de segurança: fecha em 3 segundos se o afterprint falhar
-                    setTimeout(function() {
-                        window.close();
-                    }, 10000);
+                    // 📱 DETECÇÃO DE DISPOSITIVO MÓVEL
+                    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
+                    // Só executa o fechamento automático se NÃO for celular
+                    if (!isMobile) {
+                        window.onafterprint = function() {
+                            window.close();
+                        };
+
+                        // Backup para Desktop: fecha em 3 segundos
+                        setTimeout(function() {
+                            window.close();
+                        }, 3000);
+                    } else {
+                        // Se for celular (RawBT/Smartphone), não faz nada. 
+                        // O operador fecha a aba manualmente após a impressão sair.
+                        console.log("Modo Mobile detectado: fechamento automático desativado para garantir a impressão.");
+                    }
 
                 }, 500); 
             };
