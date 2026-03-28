@@ -31,14 +31,16 @@ const calculateDistance = (lat1, lon1, lat2, lon2) => {
     return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
 };
 
-const getTodayLocal = () => {
-    const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+// HELPER: Converte qualquer data (UTC ou Local) para uma string YYYY-MM-DD no fuso local do PC
+const getLocalDateString = (dateObj = new Date()) => {
+    const d = typeof dateObj === 'string' ? new Date(dateObj) : dateObj;
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
 
-const getMonthLocal = () => {
-    const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+// HELPER: Converte qualquer data para YYYY-MM no fuso local do PC
+const getLocalMonthString = (dateObj = new Date()) => {
+    const d = typeof dateObj === 'string' ? new Date(dateObj) : dateObj;
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 };
 
 const BalcaoPOS = () => {
@@ -56,13 +58,12 @@ const BalcaoPOS = () => {
   const [showMobileCart, setShowMobileCart] = useState(false);
   const [orderType, setOrderType] = useState('balcao'); 
   
-  // ESTADOS DE ENCOMENDA
   const [isPreOrder, setIsPreOrder] = useState(false);
   const [downPayment, setDownPayment] = useState('');
   const [preOrderDate, setPreOrderDate] = useState(''); 
-  const [preOrderPeriod, setPreOrderPeriod] = useState(''); 
+  const [preOrderPeriod, setPreOrderPeriod] = useState('');
+  const [timeType, setTimeType] = useState('period'); 
 
-  // ESTADO DE DESCONTO
   const [discountPercent, setDiscountPercent] = useState('');
 
   const [deliveryFee, setDeliveryFee] = useState(''); 
@@ -71,7 +72,6 @@ const BalcaoPOS = () => {
   const [editingObsId, setEditingObsId] = useState(null);
   const [tempObs, setTempObs] = useState('');
   
-  // MODAL DE EDIÇÃO DE OBS PÓS-VENDA
   const [editObsModal, setEditObsModal] = useState({ isOpen: false, order: null, text: '' });
 
   const [customer, setCustomer] = useState({ id: null, name: '', phone: '', cpf: '', cep: '', street: '', number: '', neighborhood: '', complement: '' });
@@ -90,8 +90,8 @@ const BalcaoPOS = () => {
   const [successOrder, setSuccessOrder] = useState(null);
 
   const [historyFilter, setHistoryFilter] = useState('day'); 
-  const [filterDate, setFilterDate] = useState(getTodayLocal());
-  const [filterMonth, setFilterMonth] = useState(getMonthLocal());
+  const [filterDate, setFilterDate] = useState(getLocalDateString());
+  const [filterMonth, setFilterMonth] = useState(getLocalMonthString());
   const [expandedOrder, setExpandedOrder] = useState(null);
   const [orderItemsLoaded, setOrderItemsLoaded] = useState([]);
   const [orderPaymentsLoaded, setOrderPaymentsLoaded] = useState([]);
@@ -125,7 +125,6 @@ const BalcaoPOS = () => {
       ).slice(0, 5); 
   }, [customers, customerSearch, customer.name]);
 
-  // CÁLCULOS MATEMÁTICOS
   const cartTotal = cart.reduce((acc, item) => acc + (item.price * item.qty), 0);
   const cartItemsCount = cart.reduce((acc, item) => acc + item.qty, 0);
   
@@ -139,19 +138,21 @@ const BalcaoPOS = () => {
       return orders.filter(o => o.metadata && (o.metadata.order_type === 'balcao' || o.metadata.order_type === 'delivery'));
   }, [orders]);
 
+  // FILTRO CORRIGIDO COM FUSO HORÁRIO LOCAL
   const displayedHistory = useMemo(() => {
       let filtered = allPosOrders;
       if (historyFilter === 'day') {
-          filtered = filtered.filter(o => o.created_at.startsWith(filterDate));
+          filtered = filtered.filter(o => getLocalDateString(o.created_at) === filterDate);
       } else if (historyFilter === 'month') {
-          filtered = filtered.filter(o => o.created_at.startsWith(filterMonth));
+          filtered = filtered.filter(o => getLocalMonthString(o.created_at) === filterMonth);
       }
       return filtered.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
   }, [allPosOrders, historyFilter, filterDate, filterMonth]);
 
+  // FILTRO CORRIGIDO COM FUSO HORÁRIO LOCAL
   const todayBalance = useMemo(() => {
-      const todayStr = getTodayLocal();
-      const todayOrders = allPosOrders.filter(o => o.created_at.startsWith(todayStr));
+      const todayStr = getLocalDateString();
+      const todayOrders = allPosOrders.filter(o => getLocalDateString(o.created_at) === todayStr);
       const totals = { total: 0, Dinheiro: 0, Pix: 0, Cartão: 0, pendente: 0, pendente_encomenda: 0 };
       
       todayOrders.forEach(o => {
@@ -562,7 +563,6 @@ const BalcaoPOS = () => {
       }
   };
 
-  // FUNÇÃO PARA SALVAR A OBSERVAÇÃO EDITADA
   const saveEditedObs = async () => {
       setIsSubmitting(true);
       try {
@@ -608,22 +608,6 @@ const BalcaoPOS = () => {
           itemsToPrint = data || [];
       }
       
-      if (orderData.metadata?.delivery_fee > 0) {
-          itemsToPrint.push({
-              name: 'Taxa de Entrega',
-              qty: 1,
-              price: orderData.metadata.delivery_fee
-          });
-      }
-
-      if (orderData.metadata?.discount_amount > 0) {
-          itemsToPrint.push({
-              name: `Desconto (${orderData.metadata.discount_percent}%)`,
-              qty: 1,
-              price: -(orderData.metadata.discount_amount)
-          });
-      }
-
       const isDelivery = orderData.metadata?.order_type === 'delivery';
       const custInfo = orderData.metadata?.customer_info;
       const html = pdvTemplate({ order: orderData, items: itemsToPrint, customerInfo: custInfo, isDelivery });
@@ -644,6 +628,7 @@ const BalcaoPOS = () => {
       setDownPayment('');   
       setPreOrderDate(''); 
       setPreOrderPeriod(''); 
+      setTimeType('period');
       setCashReceived('');
       setShowMobileCart(false);
       setSuccessOrder(null);
@@ -1062,7 +1047,8 @@ const BalcaoPOS = () => {
           ${showMobileCart ? 'translate-y-0' : 'translate-y-full md:translate-y-0'}
       `}>
           
-          <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-white shadow-sm z-10">
+          {/* Header */}
+          <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-white shadow-sm z-10 flex-shrink-0">
               <div className="flex items-center gap-3">
                   <h2 className="text-lg font-black text-slate-800 uppercase tracking-tighter">Carrinho</h2>
                   {cart.length > 0 && (
@@ -1074,7 +1060,8 @@ const BalcaoPOS = () => {
               <button onClick={() => setShowMobileCart(false)} className="md:hidden p-2 bg-slate-100 rounded-full active:scale-90"><X size={20}/></button>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-slate-50/50">
+          {/* Cart Items Area - Gets at least 20vh of space and scrolls naturally */}
+          <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-slate-50/50 min-h-[20vh] custom-scrollbar">
               {cart.length === 0 ? (
                   <div className="h-full flex flex-col items-center justify-center text-slate-300 space-y-2 opacity-50">
                       <ShoppingCart size={48} />
@@ -1126,22 +1113,26 @@ const BalcaoPOS = () => {
               )}
           </div>
 
+          {/* Bottom Panel - Controls with Max Height to prevent squishing the cart */}
           {cart.length > 0 && (
-              <div className="bg-white border-t border-slate-100 shadow-[0_-10px_40px_rgba(0,0,0,0.05)] p-4 space-y-4 overflow-y-auto max-h-[60vh] md:max-h-none z-20">
+              <div className="flex flex-col bg-white border-t border-slate-100 shadow-[0_-10px_40px_rgba(0,0,0,0.05)] z-20 max-h-[65vh] md:max-h-[60vh]">
                   
-                  <div className="bg-purple-50 rounded-2xl border border-purple-100 overflow-hidden transition-all">
-                      <div className="flex justify-between items-center p-3">
-                          <div className="flex items-center gap-2 text-purple-700">
-                              <Clock size={16} /> <span className="text-[10px] font-black uppercase tracking-widest">Encomenda (Sinal)</span>
-                          </div>
-                          <label className="flex items-center gap-1.5 cursor-pointer">
-                              <input type="checkbox" checked={isPreOrder} onChange={e => { setIsPreOrder(e.target.checked); setPaymentStatus('paid'); }} className="accent-purple-600 w-4 h-4"/>
-                              <span className="text-[9px] font-black text-purple-600 uppercase">Ativar</span>
-                          </label>
-                      </div>
+                  {/* Formulários Rola de Forma Independente Aqui Dentro */}
+                  <div className="overflow-y-auto p-4 space-y-4 flex-1 custom-scrollbar">
                       
-                      {isPreOrder && (
-                          <div className="p-3 pt-0 grid grid-cols-2 gap-2 animate-in slide-in-from-top-2 border-t border-purple-200 mt-1">
+                      <div className="bg-purple-50 rounded-2xl border border-purple-100 overflow-hidden transition-all">
+                          <div className="flex justify-between items-center p-3">
+                              <div className="flex items-center gap-2 text-purple-700">
+                                  <Clock size={16} /> <span className="text-[10px] font-black uppercase tracking-widest">Encomenda (Sinal)</span>
+                              </div>
+                              <label className="flex items-center gap-1.5 cursor-pointer">
+                                  <input type="checkbox" checked={isPreOrder} onChange={e => { setIsPreOrder(e.target.checked); setPaymentStatus('paid'); }} className="accent-purple-600 w-4 h-4"/>
+                                  <span className="text-[9px] font-black text-purple-600 uppercase">Ativar</span>
+                              </label>
+                          </div>
+                          
+                          {isPreOrder && (
+                          <div className="p-3 pt-0 animate-in slide-in-from-top-2 border-t border-purple-200 mt-1 space-y-3">
                               <div>
                                   <label className="text-[9px] font-black text-purple-700 uppercase block mb-1 mt-2">Data Retirada/Entrega</label>
                                   <input 
@@ -1151,217 +1142,255 @@ const BalcaoPOS = () => {
                                       onChange={e => setPreOrderDate(e.target.value)} 
                                   />
                               </div>
+                              
                               <div>
-                                  <label className="text-[9px] font-black text-purple-700 uppercase block mb-1 mt-2">Horário/Período</label>
-                                  <input 
-                                      type="text" 
-                                      placeholder="Ex: Manhã, 14:30..."
-                                      className="w-full p-2.5 bg-white border border-purple-200 rounded-xl text-xs font-bold outline-none focus:border-purple-400 text-slate-700" 
-                                      value={preOrderPeriod} 
-                                      onChange={e => setPreOrderPeriod(e.target.value)} 
-                                  />
+                                  <div className="flex items-center justify-between mb-1 mt-2">
+                                      <label className="text-[9px] font-black text-purple-700 uppercase">Horário ou Período</label>
+                                      
+                                      {/* Toggles entre Período e Hora Exata */}
+                                      <div className="flex bg-purple-100 p-0.5 rounded-lg">
+                                          <button 
+                                              onClick={() => { setTimeType('period'); setPreOrderPeriod(''); }} 
+                                              className={`px-2 py-1 rounded text-[8px] font-black uppercase transition-colors ${timeType === 'period' ? 'bg-white text-purple-700 shadow-sm' : 'text-purple-400'}`}
+                                          >
+                                              Período
+                                          </button>
+                                          <button 
+                                              onClick={() => { setTimeType('exact'); setPreOrderPeriod(''); }} 
+                                              className={`px-2 py-1 rounded text-[8px] font-black uppercase transition-colors ${timeType === 'exact' ? 'bg-white text-purple-700 shadow-sm' : 'text-purple-400'}`}
+                                          >
+                                              Hora Exata
+                                          </button>
+                                      </div>
+                                  </div>
+
+                                  {timeType === 'period' ? (
+                                      <div className="grid grid-cols-3 gap-2">
+                                          {['Manhã', 'Tarde', 'Noite'].map(period => (
+                                              <button
+                                                  key={period}
+                                                  onClick={() => setPreOrderPeriod(period)}
+                                                  className={`p-2.5 rounded-xl text-xs font-bold transition-all border ${preOrderPeriod === period ? 'bg-purple-500 text-white border-purple-500' : 'bg-white text-slate-500 border-purple-200 hover:border-purple-300'}`}
+                                              >
+                                                  {period}
+                                              </button>
+                                          ))}
+                                      </div>
+                                  ) : (
+                                      <input 
+                                          type="time" 
+                                          className="w-full p-2.5 bg-white border border-purple-200 rounded-xl text-xs font-bold outline-none focus:border-purple-400 text-slate-700" 
+                                          value={preOrderPeriod} 
+                                          onChange={e => setPreOrderPeriod(e.target.value)} 
+                                      />
+                                  )}
                               </div>
                           </div>
                       )}
-                  </div>
+                      </div>
 
-                  <div className="flex bg-slate-100 p-1 rounded-2xl">
-                      <button onClick={() => setOrderType('balcao')} className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase flex items-center justify-center gap-2 transition-all ${orderType === 'balcao' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-400'}`}>
-                          <Store size={16}/> Balcão
-                      </button>
-                      <button onClick={() => setOrderType('delivery')} className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase flex items-center justify-center gap-2 transition-all ${orderType === 'delivery' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-400'}`}>
-                          <Bike size={16}/> Delivery
-                      </button>
-                  </div>
+                      <div className="flex bg-slate-100 p-1 rounded-2xl">
+                          <button onClick={() => setOrderType('balcao')} className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase flex items-center justify-center gap-2 transition-all ${orderType === 'balcao' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-400'}`}>
+                              <Store size={16}/> Balcão
+                          </button>
+                          <button onClick={() => setOrderType('delivery')} className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase flex items-center justify-center gap-2 transition-all ${orderType === 'delivery' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-400'}`}>
+                              <Bike size={16}/> Delivery
+                          </button>
+                      </div>
 
-                  <div className="space-y-2 bg-slate-50 p-3 rounded-3xl border border-slate-100">
-                      <div className="flex justify-between items-center mb-1">
-                          <div className="flex items-center gap-2 text-indigo-600">
-                              <User size={14} /> <span className="text-[10px] font-black uppercase tracking-widest">Cliente</span>
+                      <div className="space-y-2 bg-slate-50 p-3 rounded-3xl border border-slate-100">
+                          <div className="flex justify-between items-center mb-1">
+                              <div className="flex items-center gap-2 text-indigo-600">
+                                  <User size={14} /> <span className="text-[10px] font-black uppercase tracking-widest">Cliente</span>
+                              </div>
+                              
+                              {!customer.id ? (
+                                  customer.name && (
+                                      <label className="flex items-center gap-1.5 cursor-pointer">
+                                          <input type="checkbox" checked={saveCustomer} onChange={e => setSaveCustomer(e.target.checked)} className="accent-yellow-400 w-4 h-4"/>
+                                          <span className="text-[9px] font-black text-slate-600 uppercase">Salvar Cadastro</span>
+                                      </label>
+                                  )
+                              ) : (
+                                  <span className="bg-green-100 text-green-700 px-2 py-1 rounded text-[9px] font-black uppercase">Cliente Vinculado</span>
+                              )}
                           </div>
                           
-                          {!customer.id ? (
-                              customer.name && (
-                                  <label className="flex items-center gap-1.5 cursor-pointer">
-                                      <input type="checkbox" checked={saveCustomer} onChange={e => setSaveCustomer(e.target.checked)} className="accent-yellow-400 w-4 h-4"/>
-                                      <span className="text-[9px] font-black text-slate-600 uppercase">Salvar Cadastro</span>
-                                  </label>
-                              )
-                          ) : (
-                              <span className="bg-green-100 text-green-700 px-2 py-1 rounded text-[9px] font-black uppercase">Cliente Vinculado</span>
+                          <div className="relative">
+                              <input 
+                                  className="w-full p-2.5 bg-white rounded-xl text-xs font-bold outline-none border border-slate-200 focus:border-yellow-400" 
+                                  placeholder="Buscar Nome, CPF ou Tel..." 
+                                  value={customerSearch || customer.name} 
+                                  onChange={e => {
+                                      setCustomerSearch(e.target.value);
+                                      setCustomer({...customer, id: null, name: e.target.value});
+                                      setShowCustomerDropdown(true);
+                                  }} 
+                                  onFocus={() => setShowCustomerDropdown(true)}
+                              />
+                              {showCustomerDropdown && (customerSearch || customer.name) && filteredCustomers.length > 0 && (
+                                  <div className="absolute bottom-full left-0 right-0 mb-1 bg-white border border-slate-200 shadow-xl rounded-xl z-50 max-h-48 overflow-y-auto">
+                                      {filteredCustomers.map(c => (
+                                          <button key={c.id} onClick={() => handleSelectCustomer(c)} className="w-full text-left p-3 hover:bg-slate-50 border-b border-slate-100 last:border-0 transition-colors">
+                                              <p className="text-xs font-bold text-slate-800">{c.name}</p>
+                                              <p className="text-[9px] text-slate-500 mt-0.5">{c.phone || 'S/ Tel'} {c.cpf ? `• CPF: ${c.cpf}` : ''}</p>
+                                          </button>
+                                      ))}
+                                  </div>
+                              )}
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2">
+                              <input className="w-full p-2.5 bg-white rounded-xl text-xs font-bold outline-none border border-slate-200 focus:border-yellow-400" placeholder="Telefone" value={customer.phone} onChange={e => setCustomer({...customer, phone: e.target.value})} />
+                              <input className="w-full p-2.5 bg-white rounded-xl text-xs font-bold outline-none border border-slate-200 focus:border-yellow-400" placeholder="CPF (Opcional)" maxLength={14} value={customer.cpf} onChange={e => setCustomer({...customer, cpf: e.target.value})} />
+                          </div>
+
+                          {orderType === 'delivery' && (
+                              <div className="animate-in slide-in-from-top-2 pt-2 mt-2 border-t border-slate-200">
+                                  
+                                  {customer.id && (
+                                      <div className="flex items-center justify-between bg-white p-2 rounded-xl border border-indigo-100 mb-2">
+                                          <span className="text-[9px] font-bold text-slate-500 flex items-center gap-1">
+                                              <MapPin size={12}/> {customer.street ? 'Endereço do Cadastro' : 'Adicionar end. ao cadastro?'}
+                                          </span>
+                                          <label className="flex items-center gap-1.5 cursor-pointer">
+                                              <input type="checkbox" checked={updateAddress} onChange={e => setUpdateAddress(e.target.checked)} className="accent-indigo-600 w-3.5 h-3.5"/>
+                                              <span className="text-[9px] font-black uppercase text-indigo-600">Salvar Modificações</span>
+                                          </label>
+                                      </div>
+                                  )}
+
+                                  <div className="grid grid-cols-3 gap-2">
+                                      <div className="col-span-3">
+                                          <input className="w-full p-2.5 bg-white rounded-xl text-xs font-bold outline-none border border-slate-200 focus:border-yellow-400" placeholder="CEP" value={customer.cep} onChange={handleCepChange} />
+                                          {cepWarning && <p className="text-[9px] font-bold text-orange-500 mt-1 ml-1 flex items-center gap-1"><AlertCircle size={10}/> {cepWarning}</p>}
+                                      </div>
+                                      <input className="col-span-2 w-full p-2.5 bg-white rounded-xl text-xs font-bold outline-none border border-slate-200 focus:border-yellow-400" placeholder="Rua / Avenida" value={customer.street} onChange={e => setCustomer({...customer, street: e.target.value})} />
+                                      <input className="w-full p-2.5 bg-white rounded-xl text-xs font-bold outline-none border border-slate-200 focus:border-yellow-400" placeholder="Num" value={customer.number} onChange={e => setCustomer({...customer, number: e.target.value})} />
+                                      <input className="col-span-3 w-full p-2.5 bg-white rounded-xl text-xs font-bold outline-none border border-slate-200 focus:border-yellow-400" placeholder="Bairro" value={customer.neighborhood} onChange={e => setCustomer({...customer, neighborhood: e.target.value})} />
+                                      <input className="col-span-3 w-full p-2.5 bg-white rounded-xl text-xs font-bold outline-none border border-slate-200 focus:border-yellow-400" placeholder="Complemento (Apto, Bloco...)" value={customer.complement} onChange={e => setCustomer({...customer, complement: e.target.value})} />
+                                  </div>
+                              </div>
                           )}
                       </div>
-                      
-                      <div className="relative">
-                          <input 
-                              className="w-full p-2.5 bg-white rounded-xl text-xs font-bold outline-none border border-slate-200 focus:border-yellow-400" 
-                              placeholder="Buscar Nome, CPF ou Tel..." 
-                              value={customerSearch || customer.name} 
-                              onChange={e => {
-                                  setCustomerSearch(e.target.value);
-                                  setCustomer({...customer, id: null, name: e.target.value});
-                                  setShowCustomerDropdown(true);
-                              }} 
-                              onFocus={() => setShowCustomerDropdown(true)}
-                          />
-                          {showCustomerDropdown && (customerSearch || customer.name) && filteredCustomers.length > 0 && (
-                              <div className="absolute bottom-full left-0 right-0 mb-1 bg-white border border-slate-200 shadow-xl rounded-xl z-50 max-h-48 overflow-y-auto">
-                                  {filteredCustomers.map(c => (
-                                      <button key={c.id} onClick={() => handleSelectCustomer(c)} className="w-full text-left p-3 hover:bg-slate-50 border-b border-slate-100 last:border-0 transition-colors">
-                                          <p className="text-xs font-bold text-slate-800">{c.name}</p>
-                                          <p className="text-[9px] text-slate-500 mt-0.5">{c.phone || 'S/ Tel'} {c.cpf ? `• CPF: ${c.cpf}` : ''}</p>
+
+                      <div className="space-y-2">
+                          <div className="flex bg-slate-100 p-1 rounded-xl">
+                              <button onClick={() => setPaymentStatus('paid')} className={`flex-1 py-2 rounded-lg text-[10px] font-black uppercase transition-all ${paymentStatus === 'paid' ? 'bg-green-500 text-white shadow-sm' : 'text-slate-400'}`}>Pago</button>
+                              {!isPreOrder && (
+                                  <button onClick={() => setPaymentStatus('pending')} className={`flex-1 py-2 rounded-lg text-[10px] font-black uppercase transition-all ${paymentStatus === 'pending' ? 'bg-orange-400 text-white shadow-sm' : 'text-slate-400'}`}>Pagar Depois</button>
+                              )}
+                          </div>
+
+                          {paymentStatus === 'paid' && (
+                              <div className="grid grid-cols-3 gap-2 animate-in fade-in">
+                                  {['Dinheiro', 'Pix', 'Cartão'].map(m => (
+                                      <button 
+                                          key={m} 
+                                          onClick={() => setPaymentMethod(m)} 
+                                          className={`py-2 rounded-xl border-2 flex flex-col items-center gap-1 transition-all ${paymentMethod === m ? 'border-yellow-400 bg-yellow-50 text-yellow-700' : 'border-slate-100 bg-white text-slate-400'}`}
+                                      >
+                                          {m === 'Dinheiro' ? <Banknote size={14}/> : m === 'Pix' ? <QrCode size={14}/> : <CreditCard size={14}/>}
+                                          <span className="text-[9px] font-black uppercase">{m}</span>
                                       </button>
                                   ))}
                               </div>
                           )}
-                      </div>
 
-                      <div className="grid grid-cols-2 gap-2">
-                          <input className="w-full p-2.5 bg-white rounded-xl text-xs font-bold outline-none border border-slate-200 focus:border-yellow-400" placeholder="Telefone" value={customer.phone} onChange={e => setCustomer({...customer, phone: e.target.value})} />
-                          <input className="w-full p-2.5 bg-white rounded-xl text-xs font-bold outline-none border border-slate-200 focus:border-yellow-400" placeholder="CPF (Opcional)" maxLength={14} value={customer.cpf} onChange={e => setCustomer({...customer, cpf: e.target.value})} />
-                      </div>
-
-                      {orderType === 'delivery' && (
-                          <div className="animate-in slide-in-from-top-2 pt-2 mt-2 border-t border-slate-200">
-                              
-                              {customer.id && (
-                                  <div className="flex items-center justify-between bg-white p-2 rounded-xl border border-indigo-100 mb-2">
-                                      <span className="text-[9px] font-bold text-slate-500 flex items-center gap-1">
-                                          <MapPin size={12}/> {customer.street ? 'Endereço do Cadastro' : 'Adicionar end. ao cadastro?'}
+                          {isPreOrder && paymentStatus === 'paid' && (
+                              <div className="flex items-center gap-2 p-3 bg-purple-50 rounded-xl border border-purple-200 animate-in slide-in-from-top-2 mt-2">
+                                  <div className="flex-1">
+                                      <label className="text-[9px] font-black uppercase text-purple-700 block mb-1">Entrada (Sinal)</label>
+                                      <input 
+                                          type="number" 
+                                          className="w-full p-2 bg-white rounded-lg text-sm font-bold outline-none border border-purple-200 focus:border-purple-400" 
+                                          placeholder="R$ 0,00" 
+                                          value={downPayment} 
+                                          onChange={e => setDownPayment(e.target.value)} 
+                                      />
+                                  </div>
+                                  <div className="flex-1 text-right">
+                                      <span className="text-[9px] font-black uppercase text-purple-700 block mb-1">Restante (Pendente)</span>
+                                      <span className={`text-lg font-black font-mono text-purple-700`}>
+                                          {formatBRL(Math.max(0, finalTotal - Number(downPayment || 0)))}
                                       </span>
-                                      <label className="flex items-center gap-1.5 cursor-pointer">
-                                          <input type="checkbox" checked={updateAddress} onChange={e => setUpdateAddress(e.target.checked)} className="accent-indigo-600 w-3.5 h-3.5"/>
-                                          <span className="text-[9px] font-black uppercase text-indigo-600">Salvar Modificações</span>
-                                      </label>
                                   </div>
-                              )}
-
-                              <div className="grid grid-cols-3 gap-2">
-                                  <div className="col-span-3">
-                                      <input className="w-full p-2.5 bg-white rounded-xl text-xs font-bold outline-none border border-slate-200 focus:border-yellow-400" placeholder="CEP" value={customer.cep} onChange={handleCepChange} />
-                                      {cepWarning && <p className="text-[9px] font-bold text-orange-500 mt-1 ml-1 flex items-center gap-1"><AlertCircle size={10}/> {cepWarning}</p>}
-                                  </div>
-                                  <input className="col-span-2 w-full p-2.5 bg-white rounded-xl text-xs font-bold outline-none border border-slate-200 focus:border-yellow-400" placeholder="Rua / Avenida" value={customer.street} onChange={e => setCustomer({...customer, street: e.target.value})} />
-                                  <input className="w-full p-2.5 bg-white rounded-xl text-xs font-bold outline-none border border-slate-200 focus:border-yellow-400" placeholder="Num" value={customer.number} onChange={e => setCustomer({...customer, number: e.target.value})} />
-                                  <input className="col-span-3 w-full p-2.5 bg-white rounded-xl text-xs font-bold outline-none border border-slate-200 focus:border-yellow-400" placeholder="Bairro" value={customer.neighborhood} onChange={e => setCustomer({...customer, neighborhood: e.target.value})} />
-                                  <input className="col-span-3 w-full p-2.5 bg-white rounded-xl text-xs font-bold outline-none border border-slate-200 focus:border-yellow-400" placeholder="Complemento (Apto, Bloco...)" value={customer.complement} onChange={e => setCustomer({...customer, complement: e.target.value})} />
                               </div>
-                          </div>
-                      )}
-                  </div>
+                          )}
 
-                  <div className="space-y-2">
-                      <div className="flex bg-slate-100 p-1 rounded-xl">
-                          <button onClick={() => setPaymentStatus('paid')} className={`flex-1 py-2 rounded-lg text-[10px] font-black uppercase transition-all ${paymentStatus === 'paid' ? 'bg-green-500 text-white shadow-sm' : 'text-slate-400'}`}>Pago</button>
-                          {!isPreOrder && (
-                              <button onClick={() => setPaymentStatus('pending')} className={`flex-1 py-2 rounded-lg text-[10px] font-black uppercase transition-all ${paymentStatus === 'pending' ? 'bg-orange-400 text-white shadow-sm' : 'text-slate-400'}`}>Pagar Depois</button>
+                          {!isPreOrder && paymentMethod === 'Dinheiro' && paymentStatus === 'paid' && (
+                              <div className="flex items-center gap-2 p-3 bg-slate-50 rounded-xl border border-slate-200 animate-in slide-in-from-top-2 mt-2">
+                                  <div className="flex-1">
+                                      <label className="text-[9px] font-black uppercase text-slate-400 block mb-1">Valor Recebido</label>
+                                      <input 
+                                          type="number" 
+                                          className="w-full p-2 bg-white rounded-lg text-sm font-bold outline-none border border-slate-200 focus:border-green-400" 
+                                          placeholder="R$ 0,00" 
+                                          value={cashReceived} 
+                                          onChange={e => setCashReceived(e.target.value)} 
+                                      />
+                                  </div>
+                                  <div className="flex-1 text-right">
+                                      <span className="text-[9px] font-black uppercase text-slate-400 block mb-1">Troco</span>
+                                      <span className={`text-lg font-black font-mono ${changeAmount > 0 ? 'text-green-600' : 'text-slate-400'}`}>
+                                          {formatBRL(changeAmount)}
+                                      </span>
+                                  </div>
+                              </div>
                           )}
                       </div>
 
-                      {paymentStatus === 'paid' && (
-                          <div className="grid grid-cols-3 gap-2 animate-in fade-in">
-                              {['Dinheiro', 'Pix', 'Cartão'].map(m => (
-                                  <button 
-                                      key={m} 
-                                      onClick={() => setPaymentMethod(m)} 
-                                      className={`py-2 rounded-xl border-2 flex flex-col items-center gap-1 transition-all ${paymentMethod === m ? 'border-yellow-400 bg-yellow-50 text-yellow-700' : 'border-slate-100 bg-white text-slate-400'}`}
-                                  >
-                                      {m === 'Dinheiro' ? <Banknote size={14}/> : m === 'Pix' ? <QrCode size={14}/> : <CreditCard size={14}/>}
-                                      <span className="text-[9px] font-black uppercase">{m}</span>
-                                  </button>
-                              ))}
-                          </div>
-                      )}
-
-                      {isPreOrder && paymentStatus === 'paid' && (
-                          <div className="flex items-center gap-2 p-3 bg-purple-50 rounded-xl border border-purple-200 animate-in slide-in-from-top-2 mt-2">
-                              <div className="flex-1">
-                                  <label className="text-[9px] font-black uppercase text-purple-700 block mb-1">Entrada (Sinal)</label>
+                      <div className="pt-3 mt-1 border-t border-slate-100 space-y-3">
+                          
+                          <div className="flex justify-between items-center animate-in fade-in">
+                              <span className="text-xs font-black uppercase text-slate-400">Desconto em Produtos (%)</span>
+                              <div className="relative w-24">
                                   <input 
                                       type="number" 
-                                      className="w-full p-2 bg-white rounded-lg text-sm font-bold outline-none border border-purple-200 focus:border-purple-400" 
-                                      placeholder="R$ 0,00" 
-                                      value={downPayment} 
-                                      onChange={e => setDownPayment(e.target.value)} 
+                                      className="w-full p-2 pr-6 bg-white rounded-lg text-sm font-bold outline-none border border-slate-200 focus:border-yellow-400 text-right text-red-500" 
+                                      placeholder="0" 
+                                      value={discountPercent} 
+                                      onChange={e => setDiscountPercent(e.target.value)} 
                                   />
-                              </div>
-                              <div className="flex-1 text-right">
-                                  <span className="text-[9px] font-black uppercase text-purple-700 block mb-1">Restante (Pendente)</span>
-                                  <span className={`text-lg font-black font-mono text-purple-700`}>
-                                      {formatBRL(Math.max(0, finalTotal - Number(downPayment || 0)))}
-                                  </span>
+                                  <span className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-bold">%</span>
                               </div>
                           </div>
-                      )}
 
-                      {!isPreOrder && paymentMethod === 'Dinheiro' && paymentStatus === 'paid' && (
-                          <div className="flex items-center gap-2 p-3 bg-slate-50 rounded-xl border border-slate-200 animate-in slide-in-from-top-2 mt-2">
-                              <div className="flex-1">
-                                  <label className="text-[9px] font-black uppercase text-slate-400 block mb-1">Valor Recebido</label>
+                          {Number(discountPercent) > 0 && (
+                              <div className="flex justify-between items-center animate-in fade-in">
+                                  <span className="text-[10px] font-black uppercase text-red-400">Desconto Aplicado</span>
+                                  <span className="text-xs font-black font-mono text-red-500">- {formatBRL(discountAmount)}</span>
+                              </div>
+                          )}
+
+                          {orderType === 'delivery' && (
+                              <div className="flex justify-between items-center animate-in fade-in">
+                                  <span className="text-xs font-black uppercase text-slate-400 flex items-center gap-2">
+                                      Taxa de Entrega
+                                      {isCalculatingFee && <Loader2 size={12} className="animate-spin text-indigo-500" />}
+                                  </span>
                                   <input 
                                       type="number" 
-                                      className="w-full p-2 bg-white rounded-lg text-sm font-bold outline-none border border-slate-200 focus:border-green-400" 
+                                      className="w-24 p-2 bg-white rounded-lg text-sm font-bold outline-none border border-slate-200 focus:border-yellow-400 text-right" 
                                       placeholder="R$ 0,00" 
-                                      value={cashReceived} 
-                                      onChange={e => setCashReceived(e.target.value)} 
+                                      value={deliveryFee} 
+                                      onChange={e => setDeliveryFee(e.target.value)} 
                                   />
                               </div>
-                              <div className="flex-1 text-right">
-                                  <span className="text-[9px] font-black uppercase text-slate-400 block mb-1">Troco</span>
-                                  <span className={`text-lg font-black font-mono ${changeAmount > 0 ? 'text-green-600' : 'text-slate-400'}`}>
-                                      {formatBRL(changeAmount)}
-                                  </span>
-                              </div>
-                          </div>
-                      )}
+                          )}
+                      </div>
                   </div>
 
-                  <div className="pt-3 mt-1 border-t border-slate-100">
-                      
-                      <div className="flex justify-between items-center mb-2 animate-in fade-in">
-                          <span className="text-xs font-black uppercase text-slate-400">Desconto em Produtos (%)</span>
-                          <div className="relative w-24">
-                              <input 
-                                  type="number" 
-                                  className="w-full p-2 pr-6 bg-white rounded-lg text-sm font-bold outline-none border border-slate-200 focus:border-yellow-400 text-right text-red-500" 
-                                  placeholder="0" 
-                                  value={discountPercent} 
-                                  onChange={e => setDiscountPercent(e.target.value)} 
-                              />
-                              <span className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-bold">%</span>
-                          </div>
-                      </div>
-
-                      {Number(discountPercent) > 0 && (
-                          <div className="flex justify-between items-center mb-2 animate-in fade-in">
-                              <span className="text-[10px] font-black uppercase text-red-400">Desconto Aplicado</span>
-                              <span className="text-xs font-black font-mono text-red-500">- {formatBRL(discountAmount)}</span>
-                          </div>
-                      )}
-
-                      {orderType === 'delivery' && (
-                          <div className="flex justify-between items-center mb-2 animate-in fade-in">
-                              <span className="text-xs font-black uppercase text-slate-400 flex items-center gap-2">
-                                  Taxa de Entrega
-                                  {isCalculatingFee && <Loader2 size={12} className="animate-spin text-indigo-500" />}
-                              </span>
-                              <input 
-                                  type="number" 
-                                  className="w-24 p-2 bg-white rounded-lg text-sm font-bold outline-none border border-slate-200 focus:border-yellow-400 text-right" 
-                                  placeholder="R$ 0,00" 
-                                  value={deliveryFee} 
-                                  onChange={e => setDeliveryFee(e.target.value)} 
-                              />
-                          </div>
-                      )}
-                      <div className="flex justify-between items-center mb-2 mt-3 pt-3 border-t border-slate-100">
+                  {/* FIXED BUTTON AT THE BOTTOM */}
+                  <div className="p-4 border-t border-slate-100 bg-white flex-shrink-0 z-30">
+                      <div className="flex justify-between items-center mb-3">
                           <span className="text-sm font-black uppercase text-slate-600">Total a Cobrar</span>
                           <span className="text-3xl font-black font-mono text-slate-800">{formatBRL(finalTotal)}</span>
                       </div>
                       <button 
                           onClick={handleCheckout} 
                           disabled={isSubmitting}
-                          className="w-full py-4 mt-2 bg-yellow-400 text-slate-900 rounded-2xl font-black uppercase text-sm shadow-xl shadow-yellow-200/50 active:scale-95 transition-transform flex justify-center items-center gap-2 disabled:opacity-70"
+                          className="w-full py-4 bg-yellow-400 text-slate-900 rounded-2xl font-black uppercase text-sm shadow-xl shadow-yellow-200/50 active:scale-95 transition-transform flex justify-center items-center gap-2 disabled:opacity-70"
                       >
                           {isSubmitting ? <Loader2 size={18} className="animate-spin"/> : <><CheckCircle2 size={20}/> Concluir Pedido</>}
                       </button>
