@@ -220,7 +220,7 @@ export const pdvTemplate = ({ order, items, customerInfo, isDelivery }) => {
                     // Backup de segurança: fecha em 3 segundos se o afterprint falhar
                     setTimeout(function() {
                         window.close();
-                    }, 3000);
+                    }, 10000);
 
                 }, 500); 
             };
