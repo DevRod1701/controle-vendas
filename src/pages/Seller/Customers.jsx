@@ -13,7 +13,7 @@ const getStoredInt = (key, defaultVal) => {
 };
 
 const Customers = () => {
-  const { customers, customerTransactions, refreshData } = useData();
+  const { customers, refreshData } = useData();
   const { session } = useAuth();
   const navigate = useNavigate();
   
@@ -29,7 +29,49 @@ const Customers = () => {
   const [newCustomer, setNewCustomer] = useState({ name: '', phone: '' });
   const [loading, setLoading] = useState(false);
 
+  // Estados Locais para Transações Globais
+  const [localTrans, setLocalTrans] = useState([]);
+  const [isLoadingTrans, setIsLoadingTrans] = useState(true);
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
+
   const monthsList = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+
+  // LOOP SEGURO: Busca TODO o histórico, 1000 por 1000, para driblar o limite do Supabase
+  useEffect(() => {
+      const fetchAllTransactions = async () => {
+          setIsLoadingTrans(true);
+          let allData = [];
+          let from = 0;
+          const step = 1000;
+          let hasMore = true;
+
+          try {
+              while (hasMore) {
+                  const { data, error } = await supabase
+                      .from('customer_transactions')
+                      .select('*') // Seguro: Evita erro de coluna faltando
+                      .range(from, from + step - 1);
+                  
+                  if (error) throw error;
+
+                  if (data && data.length > 0) {
+                      allData = [...allData, ...data];
+                      from += step;
+                      if (data.length < step) hasMore = false;
+                  } else {
+                      hasMore = false;
+                  }
+              }
+              setLocalTrans(allData);
+          } catch (err) {
+              console.error("Erro ao buscar histórico completo:", err);
+          } finally {
+              setIsLoadingTrans(false);
+          }
+      };
+
+      fetchAllTransactions();
+  }, [refreshTrigger]);
 
   useEffect(() => {
       sessionStorage.setItem('cust_search', search);
@@ -43,25 +85,36 @@ const Customers = () => {
   const prevMonth = () => { if (month === 0) { setMonth(11); setYear(year - 1); } else { setMonth(month - 1); } };
   const nextMonth = () => { if (month === 11) { setMonth(0); setYear(year + 1); } else { setMonth(month + 1); } };
 
+  // MATEMÁTICA IDÊNTICA AO CUSTOMER DETAIL
   const customersWithBalance = useMemo(() => {
+    if (!customers) return [];
+
     return customers.map(c => {
-      const allTrans = customerTransactions.filter(t => t.customer_id === c.id);
+      const allTrans = localTrans.filter(t => t.customer_id === c.id);
       
-      let paymentPool = allTrans
+      // 1. CÁLCULO GERAL (EXATAMENTE COMO NA TELA DE DETALHES)
+      const globalPurchases = allTrans
+          .filter(t => t.type === 'purchase' || t.type === 'sale')
+          .reduce((acc, t) => acc + Number(t.amount || t.total || 0), 0);
+
+      const globalPayments = allTrans
           .filter(t => t.type === 'payment')
           .reduce((acc, t) => acc + Number(t.amount || t.total || 0), 0);
+
+      const globalBalance = globalPurchases - globalPayments;
+
+      // 2. CÁLCULO POR PERÍODO (Pote FIFO)
+      let paymentPool = globalPayments;
 
       const purchases = allTrans
           .filter(t => t.type === 'purchase' || t.type === 'sale')
           .sort((a, b) => new Date((a.date || a.created_at).split('T')[0]) - new Date((b.date || b.created_at).split('T')[0]));
 
-      let globalPurchases = 0;
       let periodUnpaid = 0; 
       let hasActivityInPeriod = false;
 
       purchases.forEach(p => {
           const val = Number(p.amount || p.total || 0);
-          globalPurchases += val;
 
           const paidForThis = Math.min(val, paymentPool);
           paymentPool -= paidForThis; 
@@ -89,6 +142,7 @@ const Customers = () => {
           }
       });
 
+      // Checa se o cliente APENAS pagou no período
       if (!hasActivityInPeriod && viewMode !== 'all') {
           const hasPaymentInPeriod = allTrans.filter(t => t.type === 'payment').some(p => {
               const pDateStr = (p.date || p.created_at || '').split('T')[0];
@@ -104,7 +158,6 @@ const Customers = () => {
       }
 
       let displayBalance = 0;
-      const globalBalance = globalPurchases - allTrans.filter(t => t.type === 'payment').reduce((acc, t) => acc + Number(t.amount || t.total || 0), 0);
 
       if (viewMode === 'all') {
           displayBalance = globalBalance; 
@@ -129,16 +182,20 @@ const Customers = () => {
         if (filterDebt) return b.balance - a.balance;
         return a.name.localeCompare(b.name);
     });
-  }, [customers, customerTransactions, search, filterDebt, viewMode, month, year, selectedDate]);
+  }, [customers, localTrans, search, filterDebt, viewMode, month, year, selectedDate]);
 
+  // CORREÇÃO: Restaurar o scroll apenas na montagem inicial quando terminar de carregar, 
+  // para evitar que mude de posição ao clicar num filtro.
   useEffect(() => {
       const savedScroll = sessionStorage.getItem('cust_scroll');
-      if (savedScroll && customersWithBalance.length > 0) {
+      if (savedScroll && !isLoadingTrans) {
           setTimeout(() => {
               window.scrollTo({ top: parseInt(savedScroll), behavior: 'instant' });
+              // Apaga a posição salva após usar, assim cliques nos filtros não causam "pulos" na tela
+              sessionStorage.removeItem('cust_scroll');
           }, 50);
       }
-  }, [customersWithBalance.length]);
+  }, [isLoadingTrans]);
 
   const totalDebtVisible = useMemo(() => {
     return customersWithBalance.reduce((acc, c) => acc + (c.balance > 0 ? c.balance : 0), 0);
@@ -149,7 +206,12 @@ const Customers = () => {
     if (!newCustomer.name) return;
     setLoading(true);
     const { error } = await supabase.from('customers').insert([{ seller_id: session.user.id, name: newCustomer.name, phone: newCustomer.phone }]);
-    if (!error) { setNewCustomer({ name: '', phone: '' }); setIsCreating(false); refreshData(); }
+    if (!error) { 
+        setNewCustomer({ name: '', phone: '' }); 
+        setIsCreating(false); 
+        refreshData(); 
+        setRefreshTrigger(prev => prev + 1); // Recarrega as transações na tela
+    }
     setLoading(false);
   };
 
@@ -164,7 +226,6 @@ const Customers = () => {
       navigate('/');
   };
 
-  // Define o texto do filtro de acordo com a aba selecionada
   const filterLabel = viewMode === 'all' ? 'Todos os Devedores' : viewMode === 'month' ? 'Devem neste mês' : 'Devem neste dia';
 
   return (
@@ -225,7 +286,6 @@ const Customers = () => {
                 <div className={`w-5 h-5 rounded-lg border flex items-center justify-center ${filterDebt ? 'bg-red-500 border-red-500 text-white' : 'border-slate-300 bg-white'}`}>
                     {filterDebt && <Filter size={10}/>}
                 </div>
-                {/* Aqui está a troca dinâmica de nome do filtro */}
                 {filterLabel}
               </button>
 
@@ -263,51 +323,58 @@ const Customers = () => {
       )}
 
       {/* LISTA DE CLIENTES */}
-      <div className="space-y-3">
-        {customersWithBalance.length === 0 && !isCreating && (
-            <div className="text-center py-10 text-slate-400">
-                <Users size={48} className="mx-auto mb-2 opacity-50"/>
-                <p className="text-xs font-bold uppercase">Nenhum registro encontrado.</p>
-                {viewMode !== 'all' && <p className="text-[10px] mt-1 text-slate-300">Tente outro período.</p>}
-            </div>
-        )}
-        
-        {customersWithBalance.map(c => (
-            <button key={c.id} onClick={() => handleCustomerClick(c.id)} className="w-full bg-white p-5 rounded-[2rem] shadow-sm flex justify-between items-center border border-slate-50 active:scale-[0.98] transition-all text-left">
-                
-                <div>
-                    <p className="font-black text-slate-800 text-sm">{c.name}</p>
-                    <div className="flex items-center gap-1 mt-1 text-slate-400">
-                        <Phone size={12}/>
-                        <p className="text-[11px] font-bold">{c.phone || "Sem contato"}</p>
+      {isLoadingTrans ? (
+          <div className="flex flex-col items-center justify-center py-20 text-slate-400 space-y-4">
+              <Loader size={40} className="animate-spin text-indigo-500" />
+              <p className="text-xs font-bold uppercase tracking-widest">Calculando Saldos...</p>
+          </div>
+      ) : (
+          <div className="space-y-3">
+            {customersWithBalance.length === 0 && !isCreating && (
+                <div className="text-center py-10 text-slate-400">
+                    <Users size={48} className="mx-auto mb-2 opacity-50"/>
+                    <p className="text-xs font-bold uppercase">Nenhum registro encontrado.</p>
+                    {viewMode !== 'all' && <p className="text-[10px] mt-1 text-slate-300">Tente outro período.</p>}
+                </div>
+            )}
+            
+            {customersWithBalance.map(c => (
+                <button key={c.id} onClick={() => handleCustomerClick(c.id)} className="w-full bg-white p-5 rounded-[2rem] shadow-sm flex justify-between items-center border border-slate-50 active:scale-[0.98] transition-all text-left">
+                    
+                    <div>
+                        <p className="font-black text-slate-800 text-sm">{c.name}</p>
+                        <div className="flex items-center gap-1 mt-1 text-slate-400">
+                            <Phone size={12}/>
+                            <p className="text-[11px] font-bold">{c.phone || "Sem contato"}</p>
+                        </div>
                     </div>
-                </div>
-                
-                <div className="text-right">
-                    {c.balance > 0.01 ? (
-                        <>
-                            <p className="text-base font-black text-red-500 font-mono">{formatBRL(c.balance)}</p>
-                            <p className="text-[9px] font-bold text-red-300 uppercase">
-                                {viewMode === 'all' ? 'Devendo Total' : 'Restante do Período'}
-                            </p>
-                        </>
-                    ) : c.balance < -0.01 ? (
-                        <>
-                            <p className="text-base font-black text-green-500 font-mono">{formatBRL(Math.abs(c.balance))}</p>
-                            <p className="text-[9px] font-bold text-green-400 uppercase">Crédito Global</p>
-                        </>
-                    ) : (
-                        <>
-                            <p className="text-base font-black text-green-500 font-mono">0,00</p>
-                            <p className="text-[9px] font-bold text-slate-300 uppercase">
-                                {viewMode === 'all' ? 'Quitado' : 'Período Quitado'}
-                            </p>
-                        </>
-                    )}
-                </div>
-            </button>
-        ))}
-      </div>
+                    
+                    <div className="text-right">
+                        {c.balance > 0.01 ? (
+                            <>
+                                <p className="text-base font-black text-red-500 font-mono">{formatBRL(c.balance)}</p>
+                                <p className="text-[9px] font-bold text-red-300 uppercase">
+                                    {viewMode === 'all' ? 'Devendo Total' : 'Restante do Período'}
+                                </p>
+                            </>
+                        ) : c.balance < -0.01 ? (
+                            <>
+                                <p className="text-base font-black text-green-500 font-mono">{formatBRL(Math.abs(c.balance))}</p>
+                                <p className="text-[9px] font-bold text-green-400 uppercase">Crédito Global</p>
+                            </>
+                        ) : (
+                            <>
+                                <p className="text-base font-black text-green-500 font-mono">0,00</p>
+                                <p className="text-[9px] font-bold text-slate-300 uppercase">
+                                    {viewMode === 'all' ? 'Quitado' : 'Período Quitado'}
+                                </p>
+                            </>
+                        )}
+                    </div>
+                </button>
+            ))}
+          </div>
+      )}
     </div>
   );
 };

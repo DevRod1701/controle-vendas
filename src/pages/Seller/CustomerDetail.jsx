@@ -13,26 +13,43 @@ import ConfirmModal from '../../components/modals/ConfirmModal';
 const CustomerDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { customers, customerTransactions, products, refreshData } = useData();
+  // Removemos customerTransactions daqui, pois vamos buscar localmente
+  const { customers, products, refreshData } = useData(); 
   
   const shareDateRef = useRef(null);
   const shareMonthRef = useRef(null);
 
+  // --- NOVO: ESTADO LOCAL PARA TODO O HISTÓRICO DO CLIENTE ---
+  const [localTrans, setLocalTrans] = useState([]);
+
+  // Busca todo o histórico do cliente específico, ignorando o limite global
+  const loadCustomerHistory = async () => {
+      const { data } = await supabase
+          .from('customer_transactions')
+          .select('*')
+          .eq('customer_id', id);
+          
+      if (data) {
+          setLocalTrans(data);
+      }
+  };
+
   useEffect(() => {
       window.scrollTo({ top: 0, behavior: 'instant' });
-  }, []);
+      loadCustomerHistory(); // Chama ao abrir o cliente
+  }, [id]);
 
   const customer = customers.find(c => c.id === id);
   
+  // Usa o localTrans que contém 100% dos dados deste cliente
   const myTrans = useMemo(() => {
-      return customerTransactions
-        .filter(t => t.customer_id === id)
+      return localTrans
         .sort((a, b) => {
             const dateA = new Date((a.date || a.created_at || '').split('T')[0]);
             const dateB = new Date((b.date || b.created_at || '').split('T')[0]);
             return dateB - dateA; // Ordenação decrescente para a lista de itens
         });
-  }, [customerTransactions, id]);
+  }, [localTrans]);
 
   const currentTotalBalance = useMemo(() => {
     const purchase = myTrans
@@ -46,7 +63,7 @@ const CustomerDetail = () => {
     return purchase - paid;
   }, [myTrans]);
 
-  // --- NOVA LÓGICA DE AMORTIZAÇÃO (POTE DE PAGAMENTOS / FIFO) ---
+  // --- LÓGICA DE AMORTIZAÇÃO (POTE DE PAGAMENTOS / FIFO) ---
   const groupedHistory = useMemo(() => {
       const groups = {};
 
@@ -243,13 +260,34 @@ const CustomerDetail = () => {
     setLoading(true);
     const finalDescription = (mode === 'purchase' && selectedProductObj) ? `${qty}x ${selectedProductObj.name}` : form.description;
     const amountVal = parseFloat(form.amount);
-    const { error } = await supabase.from('customer_transactions').insert([{ customer_id: id, type: mode, description: finalDescription, amount: amountVal, date: form.date }]);
-    if (!error) { setAlertInfo({ type: 'success', title: 'Sucesso', message: 'Salvo!' }); handleCloseModal(); refreshData(); } 
-    else { setAlertInfo({ type: 'error', title: 'Erro', message: 'Falha ao salvar.' }); }
+    
+    const { error } = await supabase.from('customer_transactions').insert([{ 
+        customer_id: id, 
+        type: mode, 
+        description: finalDescription, 
+        amount: amountVal, 
+        date: form.date 
+    }]);
+    
+    if (!error) { 
+        setAlertInfo({ type: 'success', title: 'Sucesso', message: 'Salvo!' }); 
+        handleCloseModal(); 
+        
+        // Recarrega apenas os dados deste cliente e o context global
+        loadCustomerHistory(); 
+        refreshData(); 
+    } else { 
+        setAlertInfo({ type: 'error', title: 'Erro', message: 'Falha ao salvar.' }); 
+    }
     setLoading(false);
   };
   
-  const confirmDeleteTransaction = async (transId) => { setConfirmDialog(null); await supabase.from('customer_transactions').delete().eq('id', transId); refreshData(); };
+  const confirmDeleteTransaction = async (transId) => { 
+      setConfirmDialog(null); 
+      await supabase.from('customer_transactions').delete().eq('id', transId); 
+      loadCustomerHistory(); // Atualiza a tela
+      refreshData(); // Atualiza a memória
+  };
 
   if (!customer) return <div className="p-6">Carregando...</div>;
 
