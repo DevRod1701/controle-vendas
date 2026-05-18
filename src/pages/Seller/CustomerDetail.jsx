@@ -9,45 +9,71 @@ import { supabase } from '../../services/supabase';
 import { formatBRL } from '../../utils/formatters';
 import AlertModal from '../../components/modals/AlertModal';
 import ConfirmModal from '../../components/modals/ConfirmModal';
+import { Loader } from '../../components/ui/Loader';
 
 const CustomerDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
-  // Removemos customerTransactions daqui, pois vamos buscar localmente
   const { customers, products, refreshData } = useData(); 
   
   const shareDateRef = useRef(null);
   const shareMonthRef = useRef(null);
 
-  // --- NOVO: ESTADO LOCAL PARA TODO O HISTÓRICO DO CLIENTE ---
   const [localTrans, setLocalTrans] = useState([]);
-
-  // Busca todo o histórico do cliente específico, ignorando o limite global
-  const loadCustomerHistory = async () => {
-      const { data } = await supabase
-          .from('customer_transactions')
-          .select('*')
-          .eq('customer_id', id);
-          
-      if (data) {
-          setLocalTrans(data);
-      }
-  };
+  const [isLoadingTrans, setIsLoadingTrans] = useState(true);
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
 
   useEffect(() => {
       window.scrollTo({ top: 0, behavior: 'instant' });
-      loadCustomerHistory(); // Chama ao abrir o cliente
-  }, [id]);
+  }, []);
+
+  // LOOP SEGURO AQUI TAMBÉM: Garante que 100% da história do cliente carregue!
+  useEffect(() => {
+      const fetchAllTransactions = async () => {
+          setIsLoadingTrans(true);
+          let allData = [];
+          let from = 0;
+          const step = 1000;
+          let hasMore = true;
+
+          try {
+              while (hasMore) {
+                  const { data, error } = await supabase
+                      .from('customer_transactions')
+                      .select('*')
+                      .eq('customer_id', id)
+                      .order('id', { ascending: true }) // CORREÇÃO CRÍTICA
+                      .range(from, from + step - 1);
+                  
+                  if (error) throw error;
+
+                  if (data && data.length > 0) {
+                      allData = [...allData, ...data];
+                      from += step;
+                      if (data.length < step) hasMore = false;
+                  } else {
+                      hasMore = false;
+                  }
+              }
+              setLocalTrans(allData);
+          } catch (err) {
+              console.error("Erro ao buscar histórico:", err);
+          } finally {
+              setIsLoadingTrans(false);
+          }
+      };
+
+      fetchAllTransactions();
+  }, [id, refreshTrigger]);
 
   const customer = customers.find(c => c.id === id);
   
-  // Usa o localTrans que contém 100% dos dados deste cliente
   const myTrans = useMemo(() => {
       return localTrans
         .sort((a, b) => {
             const dateA = new Date((a.date || a.created_at || '').split('T')[0]);
             const dateB = new Date((b.date || b.created_at || '').split('T')[0]);
-            return dateB - dateA; // Ordenação decrescente para a lista de itens
+            return dateB - dateA; 
         });
   }, [localTrans]);
 
@@ -63,16 +89,13 @@ const CustomerDetail = () => {
     return purchase - paid;
   }, [myTrans]);
 
-  // --- LÓGICA DE AMORTIZAÇÃO (POTE DE PAGAMENTOS / FIFO) ---
   const groupedHistory = useMemo(() => {
       const groups = {};
 
-      // 1. Pote de Pagamentos Globais do Cliente
       let paymentPool = myTrans
           .filter(t => t.type === 'payment')
           .reduce((acc, t) => acc + Number(t.amount || t.total || 0), 0);
 
-      // 2. Agrupa tudo por mês
       myTrans.forEach(t => {
           const rawDate = (t.date || t.created_at || '').split('T')[0];
           const dateObj = new Date(rawDate + 'T12:00:00');
@@ -90,27 +113,24 @@ const CustomerDetail = () => {
           else if (t.type === 'payment') groups[key].paymentsInMonth += val;
       });
 
-      // 3. Aplica a quitação cronológica (Do mês mais velho para o mais novo)
-      const sortedKeys = Object.keys(groups).sort(); // Garante ordem antiga -> nova
+      const sortedKeys = Object.keys(groups).sort(); 
       
       const calculatedGroups = sortedKeys.map((key, index) => {
           const group = groups[key];
           
-          // Usa o dinheiro do "pote" para quitar as compras deste mês
           const paidForThisMonth = Math.min(group.purchasesInMonth, paymentPool);
-          paymentPool -= paidForThisMonth; // Subtrai o dinheiro usado do pote
+          paymentPool -= paidForThisMonth; 
           
           let remainingDebtThisMonth = group.purchasesInMonth - paidForThisMonth;
 
-          // Se estamos no mês mais recente (último do loop) e ainda sobrou dinheiro no Pote, é Crédito!
           if (index === sortedKeys.length - 1 && paymentPool > 0) {
-              remainingDebtThisMonth = -paymentPool; // Negativo para UI exibir como "Crédito"
+              remainingDebtThisMonth = -paymentPool; 
           }
 
           return { ...group, amortizedDebt: remainingDebtThisMonth };
       });
 
-      return calculatedGroups.reverse(); // Inverte para mostrar o mês mais recente no topo
+      return calculatedGroups.reverse(); 
   }, [myTrans]);
 
   const [expandedMonths, setExpandedMonths] = useState(() => {
@@ -272,9 +292,7 @@ const CustomerDetail = () => {
     if (!error) { 
         setAlertInfo({ type: 'success', title: 'Sucesso', message: 'Salvo!' }); 
         handleCloseModal(); 
-        
-        // Recarrega apenas os dados deste cliente e o context global
-        loadCustomerHistory(); 
+        setRefreshTrigger(prev => prev + 1); 
         refreshData(); 
     } else { 
         setAlertInfo({ type: 'error', title: 'Erro', message: 'Falha ao salvar.' }); 
@@ -285,8 +303,8 @@ const CustomerDetail = () => {
   const confirmDeleteTransaction = async (transId) => { 
       setConfirmDialog(null); 
       await supabase.from('customer_transactions').delete().eq('id', transId); 
-      loadCustomerHistory(); // Atualiza a tela
-      refreshData(); // Atualiza a memória
+      setRefreshTrigger(prev => prev + 1);
+      refreshData(); 
   };
 
   if (!customer) return <div className="p-6">Carregando...</div>;
@@ -468,64 +486,71 @@ const CustomerDetail = () => {
         </div>
       )}
 
-      <div className="space-y-4">
-        <h3 className="text-sm font-black text-slate-800 uppercase ml-2">Extrato Mensal</h3>
-        {myTrans.length === 0 && <p className="text-center text-slate-400 text-xs py-4">Nenhuma movimentação.</p>}
+      {isLoadingTrans ? (
+          <div className="flex flex-col items-center justify-center py-20 text-slate-400 space-y-4">
+              <Loader size={40} className="animate-spin text-indigo-500" />
+              <p className="text-xs font-bold uppercase tracking-widest">Calculando Extrato...</p>
+          </div>
+      ) : (
+          <div className="space-y-4">
+            <h3 className="text-sm font-black text-slate-800 uppercase ml-2">Extrato Mensal</h3>
+            {myTrans.length === 0 && <p className="text-center text-slate-400 text-xs py-4">Nenhuma movimentação.</p>}
 
-        {groupedHistory.map(group => {
-            const isExpanded = expandedMonths.includes(group.id);
-            const remainingDebt = group.amortizedDebt;
+            {groupedHistory.map(group => {
+                const isExpanded = expandedMonths.includes(group.id);
+                const remainingDebt = group.amortizedDebt;
 
-            return (
-                <div key={group.id} className="bg-white rounded-[2rem] border border-slate-100 shadow-sm overflow-hidden">
-                    <button onClick={() => toggleMonth(group.id)} className="w-full p-5 flex items-center justify-between bg-slate-50 hover:bg-slate-100 transition-colors">
-                        <div className="text-left">
-                            <p className="font-black text-slate-800 capitalize">{group.label}</p>
-                            <div className="flex gap-2 text-[9px] font-bold text-slate-400 uppercase mt-1">
-                                <span className="text-red-400">-{formatBRL(group.purchasesInMonth)}</span>
-                                <span>|</span>
-                                <span className="text-green-500">+{formatBRL(group.paymentsInMonth)}</span>
-                            </div>
-                        </div>
-                        <div className="text-right">
-                            {remainingDebt > 0.01 ? (
-                                <p className="text-sm font-black text-red-500 font-mono">Deve {formatBRL(remainingDebt)}</p>
-                            ) : remainingDebt < -0.01 ? (
-                                <p className="text-sm font-black text-green-500 font-mono uppercase">Crédito {formatBRL(Math.abs(remainingDebt))}</p>
-                            ) : (
-                                <p className="text-sm font-black text-green-500 font-mono uppercase">Quitado</p>
-                            )}
-                            <div className="flex justify-end mt-1">{isExpanded ? <ChevronUp size={16} className="text-slate-300"/> : <ChevronDown size={16} className="text-slate-300"/>}</div>
-                        </div>
-                    </button>
-
-                    {isExpanded && (
-                        <div className="p-2 space-y-2 bg-white">
-                            {group.items.map(t => (
-                                <div key={t.id} className="flex justify-between items-start p-3 hover:bg-slate-50 rounded-xl transition-colors">
-                                    <div className="flex items-start gap-3 flex-1 min-w-0">
-                                        <div className={`p-2 rounded-lg flex-shrink-0 ${t.type === 'purchase' || t.type === 'sale' ? 'bg-red-50 text-red-400' : 'bg-green-50 text-green-500'}`}>
-                                            {t.type === 'purchase' || t.type === 'sale' ? <Calendar size={14}/> : <DollarSign size={14}/>}
-                                        </div>
-                                        <div className="min-w-0 pr-2">
-                                            <p className="font-bold text-slate-700 text-xs break-words leading-tight">{t.description}</p>
-                                            <p className="text-[9px] text-slate-400 font-bold mt-0.5">{formatDateDisplay(t.date || t.created_at)}</p>
-                                        </div>
-                                    </div>
-                                    <div className="text-right flex-shrink-0 ml-1">
-                                        <p className={`font-mono font-black text-xs ${t.type === 'purchase' || t.type === 'sale' ? 'text-red-400' : 'text-green-500'}`}>
-                                            {t.type === 'purchase' || t.type === 'sale' ? '-' : '+'} {formatBRL(Number(t.amount || t.total || 0))}
-                                        </p>
-                                        <button onClick={() => { setConfirmDialog({ title: 'Apagar?', message: 'Confirmar exclusão?', action: () => confirmDeleteTransaction(t.id) }) }} className="text-[8px] text-red-300 font-bold uppercase mt-1 hover:text-red-500">Apagar</button>
-                                    </div>
+                return (
+                    <div key={group.id} className="bg-white rounded-[2rem] border border-slate-100 shadow-sm overflow-hidden">
+                        <button onClick={() => toggleMonth(group.id)} className="w-full p-5 flex items-center justify-between bg-slate-50 hover:bg-slate-100 transition-colors">
+                            <div className="text-left">
+                                <p className="font-black text-slate-800 capitalize">{group.label}</p>
+                                <div className="flex gap-2 text-[9px] font-bold text-slate-400 uppercase mt-1">
+                                    <span className="text-red-400">-{formatBRL(group.purchasesInMonth)}</span>
+                                    <span>|</span>
+                                    <span className="text-green-500">+{formatBRL(group.paymentsInMonth)}</span>
                                 </div>
-                            ))}
-                        </div>
-                    )}
-                </div>
-            );
-        })}
-      </div>
+                            </div>
+                            <div className="text-right">
+                                {remainingDebt > 0.01 ? (
+                                    <p className="text-sm font-black text-red-500 font-mono">Deve {formatBRL(remainingDebt)}</p>
+                                ) : remainingDebt < -0.01 ? (
+                                    <p className="text-sm font-black text-green-500 font-mono uppercase">Crédito {formatBRL(Math.abs(remainingDebt))}</p>
+                                ) : (
+                                    <p className="text-sm font-black text-green-500 font-mono uppercase">Quitado</p>
+                                )}
+                                <div className="flex justify-end mt-1">{isExpanded ? <ChevronUp size={16} className="text-slate-300"/> : <ChevronDown size={16} className="text-slate-300"/>}</div>
+                            </div>
+                        </button>
+
+                        {isExpanded && (
+                            <div className="p-2 space-y-2 bg-white">
+                                {group.items.map(t => (
+                                    <div key={t.id} className="flex justify-between items-start p-3 hover:bg-slate-50 rounded-xl transition-colors">
+                                        <div className="flex items-start gap-3 flex-1 min-w-0">
+                                            <div className={`p-2 rounded-lg flex-shrink-0 ${t.type === 'purchase' || t.type === 'sale' ? 'bg-red-50 text-red-400' : 'bg-green-50 text-green-500'}`}>
+                                                {t.type === 'purchase' || t.type === 'sale' ? <Calendar size={14}/> : <DollarSign size={14}/>}
+                                            </div>
+                                            <div className="min-w-0 pr-2">
+                                                <p className="font-bold text-slate-700 text-xs break-words leading-tight">{t.description}</p>
+                                                <p className="text-[9px] text-slate-400 font-bold mt-0.5">{formatDateDisplay(t.date || t.created_at)}</p>
+                                            </div>
+                                        </div>
+                                        <div className="text-right flex-shrink-0 ml-1">
+                                            <p className={`font-mono font-black text-xs ${t.type === 'purchase' || t.type === 'sale' ? 'text-red-400' : 'text-green-500'}`}>
+                                                {t.type === 'purchase' || t.type === 'sale' ? '-' : '+'} {formatBRL(Number(t.amount || t.total || 0))}
+                                            </p>
+                                            <button onClick={() => { setConfirmDialog({ title: 'Apagar?', message: 'Confirmar exclusão?', action: () => confirmDeleteTransaction(t.id) }) }} className="text-[8px] text-red-300 font-bold uppercase mt-1 hover:text-red-500">Apagar</button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                );
+            })}
+          </div>
+      )}
     </div>
   );
 };

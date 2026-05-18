@@ -36,7 +36,7 @@ const Customers = () => {
 
   const monthsList = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
 
-  // LOOP SEGURO: Busca TODO o histórico, 1000 por 1000, para driblar o limite do Supabase
+  // LOOP SEGURO: Busca TODO o histórico com ORDENAÇÃO OBRIGATÓRIA
   useEffect(() => {
       const fetchAllTransactions = async () => {
           setIsLoadingTrans(true);
@@ -49,7 +49,8 @@ const Customers = () => {
               while (hasMore) {
                   const { data, error } = await supabase
                       .from('customer_transactions')
-                      .select('*') // Seguro: Evita erro de coluna faltando
+                      .select('*') 
+                      .order('id', { ascending: true }) // CORREÇÃO CRÍTICA: Garante que nenhuma linha é pulada
                       .range(from, from + step - 1);
                   
                   if (error) throw error;
@@ -71,7 +72,7 @@ const Customers = () => {
       };
 
       fetchAllTransactions();
-  }, [refreshTrigger]);
+  }, [refreshTrigger, customers]); // Recarrega se adicionar novo cliente
 
   useEffect(() => {
       sessionStorage.setItem('cust_search', search);
@@ -92,7 +93,6 @@ const Customers = () => {
     return customers.map(c => {
       const allTrans = localTrans.filter(t => t.customer_id === c.id);
       
-      // 1. CÁLCULO GERAL (EXATAMENTE COMO NA TELA DE DETALHES)
       const globalPurchases = allTrans
           .filter(t => t.type === 'purchase' || t.type === 'sale')
           .reduce((acc, t) => acc + Number(t.amount || t.total || 0), 0);
@@ -103,7 +103,6 @@ const Customers = () => {
 
       const globalBalance = globalPurchases - globalPayments;
 
-      // 2. CÁLCULO POR PERÍODO (Pote FIFO)
       let paymentPool = globalPayments;
 
       const purchases = allTrans
@@ -142,7 +141,6 @@ const Customers = () => {
           }
       });
 
-      // Checa se o cliente APENAS pagou no período
       if (!hasActivityInPeriod && viewMode !== 'all') {
           const hasPaymentInPeriod = allTrans.filter(t => t.type === 'payment').some(p => {
               const pDateStr = (p.date || p.created_at || '').split('T')[0];
@@ -184,14 +182,11 @@ const Customers = () => {
     });
   }, [customers, localTrans, search, filterDebt, viewMode, month, year, selectedDate]);
 
-  // CORREÇÃO: Restaurar o scroll apenas na montagem inicial quando terminar de carregar, 
-  // para evitar que mude de posição ao clicar num filtro.
   useEffect(() => {
       const savedScroll = sessionStorage.getItem('cust_scroll');
       if (savedScroll && !isLoadingTrans) {
           setTimeout(() => {
               window.scrollTo({ top: parseInt(savedScroll), behavior: 'instant' });
-              // Apaga a posição salva após usar, assim cliques nos filtros não causam "pulos" na tela
               sessionStorage.removeItem('cust_scroll');
           }, 50);
       }
@@ -210,7 +205,7 @@ const Customers = () => {
         setNewCustomer({ name: '', phone: '' }); 
         setIsCreating(false); 
         refreshData(); 
-        setRefreshTrigger(prev => prev + 1); // Recarrega as transações na tela
+        setRefreshTrigger(prev => prev + 1); 
     }
     setLoading(false);
   };
@@ -231,13 +226,11 @@ const Customers = () => {
   return (
     <div className="p-6 pb-24 space-y-4 animate-in fade-in font-bold">
       
-      {/* HEADER */}
       <div className="flex items-center gap-3">
         <button onClick={handleGoHome} className="p-3 bg-white rounded-2xl shadow-sm"><ArrowLeft size={20}/></button>
         <h2 className="text-xl font-black text-slate-800 uppercase">Meus Clientes</h2>
       </div>
 
-      {/* BUSCA + NOVO */}
       <div className="flex gap-2">
         <div className="relative flex-1">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
@@ -246,7 +239,6 @@ const Customers = () => {
         <button onClick={() => setIsCreating(true)} className="p-4 bg-yellow-400 text-slate-900 rounded-2xl shadow-sm active:scale-95 transition-all"><UserPlus size={20}/></button>
       </div>
 
-      {/* PAINEL DE FILTROS */}
       <div className="bg-white p-3 rounded-[2rem] shadow-sm space-y-3 border border-slate-50">
           
           <div className="flex bg-slate-100 p-1 rounded-2xl">
@@ -297,7 +289,6 @@ const Customers = () => {
           </div>
       </div>
 
-      {/* AVISO DISCRETO E EXPLICATIVO (Só aparece quando não está no Geral) */}
       {viewMode !== 'all' && (
           <div className="bg-indigo-50 p-3 rounded-2xl border border-indigo-100 flex items-start gap-3 animate-in fade-in">
               <div className="p-1.5 bg-indigo-100 text-indigo-600 rounded-full mt-0.5"><Info size={14}/></div>
@@ -322,7 +313,6 @@ const Customers = () => {
         </form>
       )}
 
-      {/* LISTA DE CLIENTES */}
       {isLoadingTrans ? (
           <div className="flex flex-col items-center justify-center py-20 text-slate-400 space-y-4">
               <Loader size={40} className="animate-spin text-indigo-500" />
